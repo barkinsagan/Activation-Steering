@@ -1,0 +1,23 @@
+experiment_id: exp_20260328_anatomy_llama38b_mcq_sweep
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/anatomy_sweep_150.csv
+  positive_prompts_path: data/prompts/anatomy_pos.txt
+  negative_prompts_path: data/prompts/anatomy_neg.txt
+
+sweep:
+  scoring_mode: both          # single_token + continuation
+  layers: null                # all layers
+  coef_list: [-10, -5, 0, 5, 10]
+  token_position: last
+  normalize_vector: false
+  formatter_style: mmlu       # appends [A]/[B]/[C]/[D] options to prompt
+  resume: true
+
+output:
+  base_dir: results/

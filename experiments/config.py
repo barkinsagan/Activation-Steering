@@ -71,8 +71,23 @@ class ExperimentConfig:
 # Loader
 # =============================================================================
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into base. Override values win."""
+    result = base.copy()
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
 def load_config(path: str) -> ExperimentConfig:
-    """Load and validate an experiment YAML config file."""
+    """Load and validate an experiment YAML config file.
+
+    If the YAML contains a ``base:`` key, the referenced file is loaded first
+    and the current file's values are deep-merged on top (override wins).
+    """
     path = Path(path)
     if not path.exists():
         print(f"Config file not found: {path}", file=sys.stderr)
@@ -80,6 +95,19 @@ def load_config(path: str) -> ExperimentConfig:
 
     with open(path) as f:
         raw = yaml.safe_load(f)
+
+    if "base" in raw:
+        base_path = Path(raw.pop("base"))
+        if not base_path.is_absolute():
+            base_path = path.parent / base_path
+        if not base_path.exists():
+            print(f"Base config not found: {base_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(base_path) as f:
+            base_raw = yaml.safe_load(f)
+        # Base must not itself have a 'base' key (no chaining for simplicity)
+        base_raw.pop("base", None)
+        raw = _deep_merge(base_raw, raw)
 
     try:
         model = ModelConfig(**raw["model"])

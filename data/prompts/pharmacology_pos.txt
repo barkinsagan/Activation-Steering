@@ -1,0 +1,20 @@
+Metformin inhibits hepatic gluconeogenesis by activating AMPK and is the first-line treatment for type 2 diabetes.
+Beta-blockers competitively antagonize catecholamines at beta-adrenergic receptors, reducing heart rate and contractility.
+Warfarin inhibits vitamin K epoxide reductase, reducing synthesis of clotting factors II, VII, IX, and X.
+ACE inhibitors block the conversion of angiotensin I to angiotensin II, reducing vasoconstriction and aldosterone secretion.
+Statins competitively inhibit HMG-CoA reductase, the rate-limiting enzyme in cholesterol biosynthesis.
+Morphine binds to mu-opioid receptors in the central nervous system to produce analgesia.
+Aspirin irreversibly acetylates cyclooxygenase, inhibiting thromboxane A2 synthesis and platelet aggregation.
+Digoxin inhibits the Na+/K+-ATPase pump, increasing intracellular calcium and enhancing cardiac contractility.
+Aminoglycosides bind the 30S ribosomal subunit and inhibit bacterial protein synthesis.
+Penicillins inhibit transpeptidase, preventing cross-linking of peptidoglycan in bacterial cell walls.
+Benzodiazepines potentiate GABA-A receptor activity by increasing the frequency of chloride channel opening.
+Loop diuretics inhibit the Na-K-2Cl cotransporter in the thick ascending limb of the loop of Henle.
+Proton pump inhibitors irreversibly block the H+/K+-ATPase in gastric parietal cells.
+Fluoroquinolones inhibit DNA gyrase and topoisomerase IV, preventing bacterial DNA replication.
+Heparin potentiates antithrombin III, inactivating thrombin and factor Xa to prevent clot formation.
+Selective serotonin reuptake inhibitors block the serotonin transporter, increasing synaptic serotonin.
+Calcium channel blockers reduce calcium influx into vascular smooth muscle and cardiac cells, causing vasodilation.
+Thiopurines are prodrugs that are converted to 6-thioguanine nucleotides, inhibiting purine synthesis.
+Tamoxifen is a selective estrogen receptor modulator that competitively inhibits estrogen in breast tissue.
+Allopurinol inhibits xanthine oxidase, reducing the production of uric acid in gout management.

@@ -1,0 +1,8 @@
+# CZ variant: same data and model, options NOT shown to the model
+base: configs/exp_20260328_anatomy_llama38b_mcq_sweep.yaml
+
+experiment_id: exp_20260328_anatomy_llama38b_cz_sweep
+
+sweep:
+  scoring_mode: both
+  formatter_style: qa         # no options appended — model is blind to alternatives

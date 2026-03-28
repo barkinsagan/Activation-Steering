@@ -1,0 +1,9 @@
+# Pharmacology subset with subject-specific steering prompts
+base: configs/exp_20260328_anatomy_llama38b_mcq_sweep.yaml
+
+experiment_id: exp_20260328_pharmacology_llama38b_mcq_sweep
+
+dataset:
+  eval_path: data/eval/pharmacology_sweep_150.csv
+  positive_prompts_path: data/prompts/pharmacology_pos.txt
+  negative_prompts_path: data/prompts/pharmacology_neg.txt
