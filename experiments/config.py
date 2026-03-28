@@ -99,7 +99,7 @@ def load_config(path: str) -> ExperimentConfig:
     if "base" in raw:
         base_path = Path(raw.pop("base"))
         if not base_path.is_absolute():
-            base_path = path.parent / base_path
+            base_path = Path.cwd() / base_path
         if not base_path.exists():
             print(f"Base config not found: {base_path}", file=sys.stderr)
             sys.exit(1)
