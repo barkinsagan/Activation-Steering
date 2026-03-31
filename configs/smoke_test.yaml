@@ -3,7 +3,7 @@ base: configs/exp_20260328_anatomy_llama38b_mcq_sweep.yaml
 experiment_id: smoke_test
 
 sweep:
-  scoring_mode: single_token   # skip continuation to keep it fast
+  scoring_mode: both
   layers: [10, 15, 20]         # 3 layers instead of all 32
   coef_list: [0, 5]            # baseline + one positive coef
   verbose_every: 5
