@@ -192,7 +192,7 @@ class OLMESFormatter:
         Choices are shuffled deterministically per question (seed + question_idx)
         so the correct answer is not always at position A.
         """
-        choices = [row["target"], row["false1"], row["false2"], row["false3"]]
+        choices = [str(row["target"]), str(row["false1"]), str(row["false2"]), str(row["false3"])]
 
         if self.shuffle_choices:
             rng = random.Random(self.seed + question_idx)
