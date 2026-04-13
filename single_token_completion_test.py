@@ -428,7 +428,7 @@ def sweep_layers_mcf(
             # Re-populate baseline cache so deltas remain consistent
             for _, r in df[df["coef"] == 0.0].iterrows():
                 key = (int(r["layer"]), int(r["question_id"]))
-                logger._baselines[key] = (float(r["logprob"]), int(r["rank"]))
+                logger._baselines[key] = (float(r["correct_label_logprob"]), int(r["correct_label_rank"]))
             continue
 
         # --- Build steering vector for this layer ---
