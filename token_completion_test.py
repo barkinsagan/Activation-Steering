@@ -54,6 +54,9 @@ class CandidateResult:
     pmi_logprob: Optional[float] = None   # OLMES: pmi  (set externally by sweep)
 
 
+ScoreMode = Literal["sum_logprob", "mean_logprob", "first_token_logprob"]
+
+
 # =============================================================================
 # Continuation Probability Scorer
 # =============================================================================
