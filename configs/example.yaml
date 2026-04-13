@@ -11,15 +11,19 @@ dataset:
   negative_prompts_path: data/prompts/neg.txt
 
 sweep:
-  scoring_mode: both            # single_token | continuation | both
+  formulation: both             # mcf | cf | both
   layers: null                  # null = all layers, or e.g. [10, 15, 20, 25]
   coef_list: [-20, -10, -5, 5, 10, 20]
   token_position: last          # last | mean
   normalize_vector: false
   norm_type: unit               # unit | std  (only if normalize_vector: true)
-  formatter_style: qa           # qa | mmlu | colon
+  task_prefix: question         # question | goal | fill_in_the_blank | continuation
+  cf_normalization: character   # none | token | character | pmi
+  num_shots: 5
+  fewshot_source: ""            # path to data/fewshots/*.yaml (empty = zero-shot)
+  shuffle_choices: true
   layer_name_pattern: "model.layers.{layer_idx}"
-  max_length: 1024
+  max_length: 2048
   verbose_every: 20
   resume: true
 

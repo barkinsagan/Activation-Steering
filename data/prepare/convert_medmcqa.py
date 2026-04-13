@@ -10,8 +10,8 @@ Outputs (per subject and for the mixed "all" set):
 
 MCQ and CZ share the same CSV structure:
   prompt, target, false1, false2, false3
-The formatter_style in the experiment YAML controls whether options are
-appended to the prompt at runtime (mmlu → MCQ, qa → CZ).
+The formulation field in the experiment YAML controls MCF vs CF scoring.
+Few-shot examples are generated into data/fewshots/ per subject.
 
 Sweep CSVs come from the train split (hyperparameter search: layers, coefs).
 Eval CSVs come from the validation split (final reporting).
@@ -39,7 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from data.prepare.base_converter import (
     shuffle_and_sample,
     save_csv,
+    save_yaml,
     validate_rows,
+    make_fewshot_examples,
     STANDARD_COLUMNS_MCQ,
 )
 
@@ -111,9 +113,11 @@ def convert_subjects(
     sweep_n: int,
     eval_n: int,
     out_dir: Path,
+    fewshot_dir: Path,
+    fewshot_n: int = 5,
     seed: int = 42,
 ):
-    """Convert specific subjects and save sweep (train) + eval (validation) CSVs."""
+    """Convert specific subjects and save sweep + eval CSVs and few-shot YAMLs."""
     def collect(ds):
         rows: Dict[str, List[Dict]] = {s: [] for s in subjects}
         for item in ds:
@@ -134,13 +138,25 @@ def convert_subjects(
         e_rows = validate_rows(eval_rows_by_subj[subj])
         print(f"\n[{subj}] train={len(s_rows)} validation={len(e_rows)}")
 
-        save_csv(shuffle_and_sample(s_rows, sweep_n, seed=seed),
+        # Few-shot examples: take first fewshot_n rows BEFORE the sweep shuffle
+        # so they are guaranteed not to appear in the sweep CSV
+        if fewshot_n > 0 and len(s_rows) >= fewshot_n:
+            fewshot_rows = s_rows[:fewshot_n]
+            examples = make_fewshot_examples(fewshot_rows, n=fewshot_n)
+            save_yaml(examples, fewshot_dir / f"{slug}_fewshot.yaml")
+            # Exclude fewshot rows from the sweep pool
+            s_rows_for_sweep = s_rows[fewshot_n:]
+        else:
+            s_rows_for_sweep = s_rows
+
+        save_csv(shuffle_and_sample(s_rows_for_sweep, sweep_n, seed=seed),
                  out_dir / f"{slug}_sweep_{sweep_n}.csv", STANDARD_COLUMNS_MCQ)
         save_csv(shuffle_and_sample(e_rows, eval_n, seed=seed),
                  out_dir / f"{slug}_eval_{eval_n}.csv", STANDARD_COLUMNS_MCQ)
 
 
-def convert_all(sweep_ds, eval_ds, sweep_n: int, eval_n: int, out_dir: Path, seed: int = 42):
+def convert_all(sweep_ds, eval_ds, sweep_n: int, eval_n: int,
+               out_dir: Path, fewshot_dir: Path, fewshot_n: int = 5, seed: int = 42):
     """Convert all subjects combined into a mixed 'medmcqa_all' set."""
     def collect(ds):
         rows = []
@@ -154,7 +170,14 @@ def convert_all(sweep_ds, eval_ds, sweep_n: int, eval_n: int, out_dir: Path, see
     e_rows = validate_rows(collect(eval_ds))
     print(f"\n[All subjects combined] train={len(s_rows)} validation={len(e_rows)}")
 
-    save_csv(shuffle_and_sample(s_rows, sweep_n, seed=seed),
+    if fewshot_n > 0 and len(s_rows) >= fewshot_n:
+        examples = make_fewshot_examples(s_rows[:fewshot_n], n=fewshot_n)
+        save_yaml(examples, fewshot_dir / "medmcqa_all_fewshot.yaml")
+        s_rows_for_sweep = s_rows[fewshot_n:]
+    else:
+        s_rows_for_sweep = s_rows
+
+    save_csv(shuffle_and_sample(s_rows_for_sweep, sweep_n, seed=seed),
              out_dir / f"medmcqa_all_sweep_{sweep_n}.csv", STANDARD_COLUMNS_MCQ)
     save_csv(shuffle_and_sample(e_rows, eval_n, seed=seed),
              out_dir / f"medmcqa_all_eval_{eval_n}.csv", STANDARD_COLUMNS_MCQ)
@@ -188,15 +211,20 @@ def main():
                         help="Samples per subject for sweep CSV (default: 150)")
     parser.add_argument("--eval_n", type=int, default=500,
                         help="Samples per subject for eval CSV (default: 500)")
+    parser.add_argument("--fewshot_n", type=int, default=5,
+                        help="Few-shot examples per subject (default: 5; 0 to skip)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out_dir", default="data/eval",
-                        help="Output directory (default: data/eval)")
+                        help="Output directory for CSVs (default: data/eval)")
+    parser.add_argument("--fewshot_dir", default="data/fewshots",
+                        help="Output directory for few-shot YAMLs (default: data/fewshots)")
     args = parser.parse_args()
 
     if not args.subjects and not args.all:
         parser.error("Specify --subjects or --all")
 
-    out_dir = Path(args.out_dir)
+    out_dir      = Path(args.out_dir)
+    fewshot_dir  = Path(args.fewshot_dir)
     sweep_ds = load_medmcqa(args.sweep_split)
     eval_ds  = load_medmcqa(args.eval_split)
 
@@ -204,12 +232,15 @@ def main():
         resolved = _resolve_subjects(args.subjects)
         if resolved:
             convert_subjects(resolved, sweep_ds, eval_ds,
-                             args.sweep_n, args.eval_n, out_dir, args.seed)
+                             args.sweep_n, args.eval_n, out_dir,
+                             fewshot_dir, args.fewshot_n, args.seed)
 
     if args.all:
         convert_subjects(list(SUBJECT_SLUGS.keys()), sweep_ds, eval_ds,
-                         args.sweep_n, args.eval_n, out_dir, args.seed)
-        convert_all(sweep_ds, eval_ds, args.sweep_n, args.eval_n, out_dir, args.seed)
+                         args.sweep_n, args.eval_n, out_dir,
+                         fewshot_dir, args.fewshot_n, args.seed)
+        convert_all(sweep_ds, eval_ds, args.sweep_n, args.eval_n, out_dir,
+                    fewshot_dir, args.fewshot_n, args.seed)
 
 
 if __name__ == "__main__":

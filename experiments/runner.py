@@ -20,6 +20,7 @@ import yaml
 
 from experiments.config import ExperimentConfig, load_config
 from experiments.registry import load_eval_dataset, load_model, load_steering_prompts
+from olmes.formatter import build_formatter
 
 
 # =============================================================================
@@ -48,68 +49,78 @@ def run_experiment(cfg: ExperimentConfig):
 
     s = cfg.sweep
 
-    # --- Determine which scorers to run ---
-    run_single_token  = s.scoring_mode in ("single_token", "both")
-    run_continuation  = s.scoring_mode in ("continuation", "both")
+    # --- Build OLMES formatter (shared by both MCF and CF sweeps) ---
+    formatter = build_formatter(
+        task_prefix=s.task_prefix,
+        num_shots=s.num_shots,
+        fewshot_source=s.fewshot_source,
+        shuffle_choices=s.shuffle_choices,
+        seed=42,
+    )
+
+    run_mcf = s.formulation in ("mcf", "both")
+    run_cf  = s.formulation in ("cf",  "both")
 
     has_false_targets = len(false_cols) > 0
 
-    # --- Single-token sweep ---
-    if run_single_token:
-        print(f"\n>>> Running SINGLE-TOKEN sweep")
-        from single_token_completion_test import sweep_layers_single_token
+    # --- MCF sweep ---
+    if run_mcf:
+        print(f"\n>>> Running MCF sweep")
+        from single_token_completion_test import sweep_layers_mcf
 
-        sweep_layers_single_token(
+        sweep_layers_mcf(
             model=model,
             tokenizer=tokenizer,
             dataset=eval_df,
             positive_prompts=pos_prompts,
             negative_prompts=neg_prompts,
             coef_list=s.coef_list,
-            out_dir=str(out_dir / "single_token"),
+            formatter=formatter,
+            out_dir=str(out_dir / "mcf"),
             layers=s.layers,
             token_position=s.token_position,
             normalize_vector=s.normalize_vector,
             norm_type=s.norm_type,
-            formatter_style=s.formatter_style,
             layer_name_pattern=s.layer_name_pattern,
             verbose_every=s.verbose_every,
             resume=s.resume,
         )
 
-    # --- Continuation sweep ---
-    if run_continuation:
+    # --- CF sweep ---
+    if run_cf:
         if has_false_targets:
-            print(f"\n>>> Running FULL MCQ CONTINUATION sweep  (false cols: {false_cols})")
-            from token_completion_test import sweep_layers_and_save_plots
+            print(f"\n>>> Running CF sweep  (false cols: {false_cols})")
+            from token_completion_test import sweep_layers_cf
 
-            sweep_layers_and_save_plots(
+            sweep_layers_cf(
                 model=model,
                 tokenizer=tokenizer,
                 ml_test_df=eval_df,
                 positive_prompts=pos_prompts,
                 negative_prompts=neg_prompts,
                 coef_list=s.coef_list,
-                out_dir=str(out_dir / "continuation"),
+                formatter=formatter,
+                cf_normalization=s.cf_normalization,
+                out_dir=str(out_dir / "cf"),
                 layers=s.layers,
                 token_position=s.token_position,
                 normalize_vector=s.normalize_vector,
                 norm_type=s.norm_type,
-                formatter_style=s.formatter_style,
                 layer_name_pattern=s.layer_name_pattern,
                 verbose_every=s.verbose_every,
                 resume=s.resume,
             )
         else:
-            print(f"\n>>> Running CONTINUATION sweep  (target only, no false cols)")
-            _run_continuation_target_only(
+            print(f"\n>>> Running CF sweep  (target only, no false cols)")
+            _run_cf_target_only(
                 model=model,
                 tokenizer=tokenizer,
                 eval_df=eval_df,
                 pos_prompts=pos_prompts,
                 neg_prompts=neg_prompts,
+                formatter=formatter,
                 cfg=cfg,
-                out_dir=out_dir / "continuation",
+                out_dir=out_dir / "cf",
             )
 
     print(f"\n{'='*70}")
@@ -122,8 +133,8 @@ def run_experiment(cfg: ExperimentConfig):
 # Continuation scorer for target-only datasets (no false columns)
 # =============================================================================
 
-def _run_continuation_target_only(model, tokenizer, eval_df, pos_prompts,
-                                   neg_prompts, cfg, out_dir):
+def _run_cf_target_only(model, tokenizer, eval_df, pos_prompts,
+                        neg_prompts, formatter, cfg, out_dir):
     """
     Run continuation scoring when there are no false targets.
     Logs logprob of the full target string per (layer, question, coef).
@@ -135,10 +146,7 @@ def _run_continuation_target_only(model, tokenizer, eval_df, pos_prompts,
 
     from hook import ModelWithHooks
     from dim import DifferenceInMeansSteering
-    from token_completion_test import (
-        ContinuationProbability,
-        PromptTargetFormatter,
-    )
+    from token_completion_test import ContinuationProbability
 
     s = cfg.sweep
     out_path = Path(out_dir)
@@ -150,7 +158,6 @@ def _run_continuation_target_only(model, tokenizer, eval_df, pos_prompts,
         tokenizer=tokenizer,
         max_length=s.max_length,
     )
-    formatter = PromptTargetFormatter(style=s.formatter_style)
 
     layers = s.layers
     if layers is None:
@@ -196,12 +203,8 @@ def _run_continuation_target_only(model, tokenizer, eval_df, pos_prompts,
                 dim_steerer.apply_steering(steering_vector, coefficient=coef)
             try:
                 for i, row in eval_df.iterrows():
-                    rr = formatter.format_mcq_row({
-                        "prompt": row["prompt"],
-                        "target": row["target"],
-                        "false1": "", "false2": "", "false3": "",
-                    })
-                    result = scorer.continuation_logprob(rr["prompt"], rr["target"])
+                    rr = formatter.format_cf(row)
+                    result = scorer.continuation_logprob(rr.prompt, rr.target)
 
                     key = (layer_idx, i)
                     if coef == 0.0:
@@ -214,12 +217,12 @@ def _run_continuation_target_only(model, tokenizer, eval_df, pos_prompts,
                         "layer": layer_idx,
                         "question_id": i,
                         "coef": coef,
-                        "prompt": rr["prompt"],
-                        "target_text": rr["target"],
+                        "prompt": rr.prompt,
+                        "target_text": rr.target,
                         "token_count": result.token_count,
                         "sum_logprob": result.sum_logprob,
                         "mean_logprob": result.mean_logprob,
-                        "first_token_logprob": result.first_token_logprob,
+                        "char_norm_logprob": result.char_norm_logprob,
                         "delta_sum_logprob": delta,
                     })
 

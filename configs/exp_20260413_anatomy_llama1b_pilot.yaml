@@ -1,7 +1,7 @@
-experiment_id: exp_20260328_anatomy_llama38b_mcq_sweep
+experiment_id: exp_20260413_anatomy_llama1b_pilot
 
 model:
-  name: meta-llama/Meta-Llama-3-8B
+  name: meta-llama/Llama-3.2-1B
   dtype: float16
   device: cuda
 
@@ -11,19 +11,20 @@ dataset:
   negative_prompts_path: data/prompts/anatomy_neg.txt
 
 sweep:
-  formulation: both           # mcf | cf | both
-  layers: null                # all layers
-  coef_list: [-10, -5, 0, 5, 10]
+  formulation: both
+  layers: [8, 12, 16]          # 3 layers — just enough to see layer variation
+  coef_list: [-5, 0, 5]        # baseline + both directions
   token_position: last
   normalize_vector: false
-  task_prefix: question       # question | goal | fill_in_the_blank | continuation
-  cf_normalization: character # none | token | character | pmi
+  task_prefix: question
+  cf_normalization: character
   num_shots: 5
   fewshot_source: data/fewshots/anatomy_fewshot.yaml
   shuffle_choices: true
   layer_name_pattern: "model.layers.{layer_idx}"
   max_length: 2048
   resume: true
+  verbose_every: 10
 
 output:
   base_dir: results/

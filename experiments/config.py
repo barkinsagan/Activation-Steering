@@ -32,15 +32,19 @@ class DatasetConfig:
 
 @dataclass
 class SweepConfig:
-    scoring_mode: str = "both"           # single_token | continuation | both
+    formulation: str = "both"            # mcf | cf | both
     layers: Optional[List[int]] = None   # None = all layers
     coef_list: List[float] = field(default_factory=lambda: [-10, -5, 5, 10])
     token_position: str = "last"         # last | mean
     normalize_vector: bool = False
     norm_type: str = "unit"              # unit | std
-    formatter_style: str = "qa"          # qa | mmlu | colon
+    task_prefix: str = "question"        # question | goal | fill_in_the_blank | continuation
+    cf_normalization: str = "character"  # none | token | character | pmi
+    num_shots: int = 5
+    fewshot_source: str = ""             # path to data/fewshots/*.yaml (empty = zero-shot)
+    shuffle_choices: bool = True         # randomise MCF label assignment per question
     layer_name_pattern: str = "model.layers.{layer_idx}"
-    max_length: int = 1024
+    max_length: int = 2048
     verbose_every: int = 20
     resume: bool = True
 
@@ -147,9 +151,9 @@ def _validate(cfg: ExperimentConfig, path: Path):
             errors.append(f"  {label}: file not found: {p}")
 
     # Enum checks
-    valid_scoring = {"single_token", "continuation", "both"}
-    if cfg.sweep.scoring_mode not in valid_scoring:
-        errors.append(f"  scoring_mode must be one of {valid_scoring}")
+    valid_formulation = {"mcf", "cf", "both"}
+    if cfg.sweep.formulation not in valid_formulation:
+        errors.append(f"  formulation must be one of {valid_formulation}")
 
     valid_position = {"last", "mean"}
     if cfg.sweep.token_position not in valid_position:
@@ -159,9 +163,18 @@ def _validate(cfg: ExperimentConfig, path: Path):
     if cfg.model.dtype not in valid_dtype:
         errors.append(f"  dtype must be one of {valid_dtype}")
 
-    valid_formatter = {"qa", "mmlu", "colon"}
-    if cfg.sweep.formatter_style not in valid_formatter:
-        errors.append(f"  formatter_style must be one of {valid_formatter}")
+    valid_prefix = {"question", "goal", "fill_in_the_blank", "continuation"}
+    if cfg.sweep.task_prefix not in valid_prefix:
+        errors.append(f"  task_prefix must be one of {valid_prefix}")
+
+    valid_cf_norm = {"none", "token", "character", "pmi"}
+    if cfg.sweep.cf_normalization not in valid_cf_norm:
+        errors.append(f"  cf_normalization must be one of {valid_cf_norm}")
+
+    if cfg.sweep.fewshot_source:
+        from pathlib import Path as _Path
+        if not _Path(cfg.sweep.fewshot_source).exists():
+            errors.append(f"  fewshot_source: file not found: {cfg.sweep.fewshot_source}")
 
     if errors:
         print(f"\nValidation errors in {path}:")

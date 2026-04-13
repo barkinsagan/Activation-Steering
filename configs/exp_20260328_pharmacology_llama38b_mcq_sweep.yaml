@@ -7,3 +7,6 @@ dataset:
   eval_path: data/eval/pharmacology_sweep_150.csv
   positive_prompts_path: data/prompts/pharmacology_pos.txt
   negative_prompts_path: data/prompts/pharmacology_neg.txt
+
+sweep:
+  fewshot_source: data/fewshots/pharmacology_fewshot.yaml

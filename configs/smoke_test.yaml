@@ -3,7 +3,9 @@ base: configs/exp_20260328_anatomy_llama38b_mcq_sweep.yaml
 experiment_id: smoke_test
 
 sweep:
-  scoring_mode: both
+  formulation: both
   layers: [10, 15, 20]         # 3 layers instead of all 32
   coef_list: [0, 5]            # baseline + one positive coef
+  num_shots: 0                 # zero-shot until fewshot data is generated
+  fewshot_source: ""
   verbose_every: 5

@@ -1,0 +1,31 @@
+# Data (generated from HuggingFace, not committed)
+data/eval/
+data/fewshots/
+
+# Experiment results and plots
+results/
+
+# Dependencies cloned into project
+olmes/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/
+
+# HuggingFace model cache
+.cache/
+
+# OS
+.DS_Store

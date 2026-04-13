@@ -7,3 +7,6 @@ dataset:
   eval_path: data/eval/medmcqa_all_sweep_150.csv
   positive_prompts_path: data/prompts/medical_general_pos.txt
   negative_prompts_path: data/prompts/medical_general_neg.txt
+
+sweep:
+  fewshot_source: data/fewshots/medmcqa_all_fewshot.yaml

@@ -1,7 +1,7 @@
 """
 Visualization for single-token steering vector layer-sweep experiments.
 
-Expects output from sweep_layers_single_token():
+Expects output from sweep_layers_mcf():
     out_dir/combined_results.csv   — one row per (layer, question, coef)
     out_dir/combined_summary.csv   — one row per (layer, coef)
     out_dir/layer_N_results.csv    — fallback if combined not present

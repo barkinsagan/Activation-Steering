@@ -1,8 +1,12 @@
 """
-Token completion scoring for steering vector experiments.
+Token completion scoring for steering vector experiments — CF (cloze/completion) formulation.
 
-Provides utilities for computing continuation probabilities and
-evaluating the effect of steering vectors on MCQ accuracy.
+Implements OLMES-compliant CF evaluation:
+  - Teacher-forcing log-prob over full answer continuation
+  - Four normalisation schemes: none | token | character | pmi
+  - OLMESFormatter for prompt construction and few-shot prepending
+
+Reference: https://github.com/allenai/olmes
 """
 
 import json
@@ -17,80 +21,20 @@ import numpy as np
 import pandas as pd
 import torch
 
+from olmes.formatter import OLMESFormatter, CFFormattedRow, build_formatter
+
 
 # =============================================================================
-# Type Aliases
+# Constants
 # =============================================================================
 
-ScoreMode = Literal["sum_logprob", "mean_logprob", "first_token_logprob"]
 CANDIDATE_NAMES = ["target", "false1", "false2", "false3"]
-
-
-# =============================================================================
-# Text Formatting Utilities
-# =============================================================================
-
-def _clean(s: Any) -> str:
-    """Strip whitespace from string representation."""
-    return str(s).strip()
-
-
-def ensure_trailing_space(s: str) -> str:
-    """Guarantee exactly one trailing space."""
-    return str(s).rstrip() + " "
-
-
-def ensure_leading_space(s: str) -> str:
-    """Guarantee exactly one leading space (important for LLaMA/SentencePiece)."""
-    s = _clean(s)
-    return " " + s if s else ""
-
-
-# =============================================================================
-# Prompt/Target Formatting
-# =============================================================================
-
-@dataclass(frozen=True)
-class PromptTargetFormatter:
-    """
-    Canonicalize prompts and answer candidates so MCQ scoring and completion
-    use identical boundary conditions (whitespace-sensitive for LLaMA).
-
-    Styles:
-        - "qa": Question: {q}\\nAnswer: format
-        - "mmlu": {q}\\nAnswer: format (when prompt already contains A/B/C/D)
-        - "colon": {q}: format
-    """
-    style: str = "qa"
-
-    def format_prompt(self, question: str) -> str:
-        """Format a question into a prompt string."""
-        q = _clean(question)
-        if self.style == "qa":
-            return ensure_trailing_space(f"Question: {q}\nAnswer:")
-        if self.style == "mmlu":
-            return ensure_trailing_space(f"{q}\nAnswer:")
-        if self.style == "colon":
-            return ensure_trailing_space(f"{q}:")
-        raise ValueError(f"Unknown style={self.style}")
-
-    def format_candidates(self, candidates: List[str]) -> List[str]:
-        """Add leading space to each candidate for proper tokenization."""
-        return [ensure_leading_space(c) for c in candidates]
-
-    def format_mcq_row(self, row: Dict[str, Any]) -> Dict[str, str]:
-        """Format a dataset row with prompt and 4 candidates."""
-        prompt = self.format_prompt(row["prompt"])
-        cands = self.format_candidates([
-            row["target"], row["false1"], row["false2"], row["false3"]
-        ])
-        return {
-            "prompt": prompt,
-            "target": cands[0],
-            "false1": cands[1],
-            "false2": cands[2],
-            "false3": cands[3],
-        }
+CF_NORM_TO_ACCURACY_COL = {
+    "none":      "accuracy_sum",
+    "token":     "accuracy_mean",
+    "character": "accuracy_char",
+    "pmi":       "accuracy_pmi",
+}
 
 
 # =============================================================================
@@ -102,9 +46,12 @@ class CandidateResult:
     """Result of computing continuation probability for a single candidate."""
     text: str
     token_count: int
-    sum_logprob: float
-    mean_logprob: float
+    char_count: int                       # len(text) incl. leading space — for character norm
+    sum_logprob: float                    # OLMES: none
+    mean_logprob: float                   # OLMES: token  (sum / num_tokens)
+    char_norm_logprob: float              # OLMES: character  (sum / num_chars)
     first_token_logprob: Optional[float]
+    pmi_logprob: Optional[float] = None   # OLMES: pmi  (set externally by sweep)
 
 
 # =============================================================================
@@ -113,25 +60,22 @@ class CandidateResult:
 
 class ContinuationProbability:
     """
-    Computes log P(continuation | prompt) via teacher forcing, and turns
-    candidate scores into a relative probability distribution (softmax).
+    Computes log P(continuation | prompt) via teacher forcing.
 
-    This version is steering-safe:
-      - Accepts a forward_fn (HF model or ModelWithHooks wrapper)
-      - Does NOT assume .eval() exists on forward_fn
-      - Supports attention_mask when available
+    Steering-safe: accepts a ModelWithHooks wrapper or any HF model as forward_fn.
 
-    Modes:
-      - sum_logprob: Joint log-prob of whole continuation (length-biased)
-      - mean_logprob: Length-normalized (fair across different token lengths)
-      - first_token_logprob: Only compares next-token (good for 1-step targets)
+    Returns all OLMES CF normalisation variants in one pass:
+      sum_logprob      → OLMES none
+      mean_logprob     → OLMES token
+      char_norm_logprob→ OLMES character
+      pmi_logprob      → OLMES pmi  (computed externally; stored here as Optional)
     """
 
     def __init__(
         self,
         forward_fn: Callable[..., Any],
         tokenizer: Any,
-        max_length: int = 1024,
+        max_length: int = 2048,
         device: Optional[torch.device] = None,
     ):
         self.forward_fn = forward_fn
@@ -187,12 +131,16 @@ class ContinuationProbability:
         prompt_len = prompt_ids.shape[1]
         cont_len = full_ids.shape[1] - prompt_len
 
+        char_count = len(continuation)  # includes leading space per OLMES spec
+
         if cont_len <= 0:
             return CandidateResult(
                 text=continuation,
                 token_count=0,
+                char_count=char_count,
                 sum_logprob=0.0,
                 mean_logprob=0.0,
+                char_norm_logprob=0.0,
                 first_token_logprob=None,
             )
 
@@ -204,7 +152,7 @@ class ContinuationProbability:
 
         logits = outputs.logits
 
-        # Compute log-probs
+        # Compute log-probs for each continuation token
         sum_lp = 0.0
         first_lp: Optional[float] = None
 
@@ -222,12 +170,15 @@ class ContinuationProbability:
             sum_lp += lp_t
 
         mean_lp = sum_lp / max(cont_len, 1)
+        char_norm_lp = sum_lp / max(char_count, 1)
 
         return CandidateResult(
             text=continuation,
             token_count=int(cont_len),
+            char_count=char_count,
             sum_logprob=float(sum_lp),
             mean_logprob=float(mean_lp),
+            char_norm_logprob=float(char_norm_lp),
             first_token_logprob=float(first_lp) if first_lp is not None else None,
         )
 
@@ -303,11 +254,23 @@ class QuestionResult:
     false2_token_count: int
     false3_token_count: int
 
-    # Sum log-probs
+    # Sum log-probs (OLMES: none)
     target_sum_lp: float
     false1_sum_lp: float
     false2_sum_lp: float
     false3_sum_lp: float
+
+    # Mean log-probs (OLMES: token)
+    target_mean_lp: float
+    false1_mean_lp: float
+    false2_mean_lp: float
+    false3_mean_lp: float
+
+    # Char-normalised log-probs (OLMES: character)
+    target_char_norm_lp: float
+    false1_char_norm_lp: float
+    false2_char_norm_lp: float
+    false3_char_norm_lp: float
 
     # First token log-probs
     target_first_lp: Optional[float]
@@ -315,69 +278,66 @@ class QuestionResult:
     false2_first_lp: Optional[float]
     false3_first_lp: Optional[float]
 
-    # Mean log-probs
-    target_mean_lp: float
-    false1_mean_lp: float
-    false2_mean_lp: float
-    false3_mean_lp: float
+    # PMI log-probs (OLMES: pmi) — None when not computed
+    target_pmi_lp: Optional[float] = None
+    false1_pmi_lp: Optional[float] = None
+    false2_pmi_lp: Optional[float] = None
+    false3_pmi_lp: Optional[float] = None
 
-    # Relative probabilities (computed in __post_init__)
-    target_prob_sum: float = 0.0
-    false1_prob_sum: float = 0.0
-    false2_prob_sum: float = 0.0
-    false3_prob_sum: float = 0.0
-    target_prob_first: float = 0.0
-    false1_prob_first: float = 0.0
-    false2_prob_first: float = 0.0
-    false3_prob_first: float = 0.0
-
-    # Derived metrics
-    predicted_sum: str = ""
-    predicted_first: str = ""
+    # --- Derived (computed in __post_init__) ---
     correct_sum: bool = False
-    correct_first: bool = False
+    correct_mean: bool = False
+    correct_char: bool = False
+    correct_pmi: bool = False
+
     target_rank_sum: int = 0
-    target_rank_first: int = 0
+    target_rank_mean: int = 0
+    target_rank_char: int = 0
+    target_rank_pmi: int = 0
+
     margin_sum: float = 0.0
-    margin_first: float = 0.0
+    margin_mean: float = 0.0
+    margin_char: float = 0.0
+    margin_pmi: float = 0.0
+
     max_wrong_sum_lp: float = 0.0
-    max_wrong_first_lp: float = 0.0
+    max_wrong_char_norm_lp: float = 0.0
 
     def __post_init__(self):
-        """Compute derived metrics."""
+        """Compute derived correctness/rank/margin metrics for all normalisations."""
+
+        def _winner_and_stats(lps: List[float]):
+            """Return (correct, rank, margin) from 4 raw log-probs."""
+            best_idx = lps.index(max(lps))
+            correct = (best_idx == 0)           # index 0 = target
+            rank = sorted(lps, reverse=True).index(lps[0]) + 1
+            margin = lps[0] - max(lps[1:])
+            return correct, rank, margin
+
+        # none (sum)
         sum_lps = [self.target_sum_lp, self.false1_sum_lp,
                    self.false2_sum_lp, self.false3_sum_lp]
-        probs_sum = self._softmax(sum_lps)
-        (self.target_prob_sum, self.false1_prob_sum,
-         self.false2_prob_sum, self.false3_prob_sum) = probs_sum
-
-        first_lps = [
-            self.target_first_lp if self.target_first_lp is not None else -1e30,
-            self.false1_first_lp if self.false1_first_lp is not None else -1e30,
-            self.false2_first_lp if self.false2_first_lp is not None else -1e30,
-            self.false3_first_lp if self.false3_first_lp is not None else -1e30,
-        ]
-        probs_first = self._softmax(first_lps)
-        (self.target_prob_first, self.false1_prob_first,
-         self.false2_prob_first, self.false3_prob_first) = probs_first
-
-        # Predictions and correctness
-        self.predicted_sum = CANDIDATE_NAMES[probs_sum.index(max(probs_sum))]
-        self.predicted_first = CANDIDATE_NAMES[probs_first.index(max(probs_first))]
-        self.correct_sum = self.predicted_sum == "target"
-        self.correct_first = self.predicted_first == "target"
-
-        # Ranks (1 = best)
-        self.target_rank_sum = sorted(probs_sum, reverse=True).index(probs_sum[0]) + 1
-        self.target_rank_first = sorted(probs_first, reverse=True).index(probs_first[0]) + 1
-
-        # Margins
-        self.margin_sum = probs_sum[0] - max(probs_sum[1:])
-        self.margin_first = probs_first[0] - max(probs_first[1:])
-
-        # Max wrong log-probs
+        self.correct_sum, self.target_rank_sum, self.margin_sum = _winner_and_stats(sum_lps)
         self.max_wrong_sum_lp = max(sum_lps[1:])
-        self.max_wrong_first_lp = max(first_lps[1:])
+
+        # token (mean)
+        mean_lps = [self.target_mean_lp, self.false1_mean_lp,
+                    self.false2_mean_lp, self.false3_mean_lp]
+        self.correct_mean, self.target_rank_mean, self.margin_mean = _winner_and_stats(mean_lps)
+
+        # character
+        char_lps = [self.target_char_norm_lp, self.false1_char_norm_lp,
+                    self.false2_char_norm_lp, self.false3_char_norm_lp]
+        self.correct_char, self.target_rank_char, self.margin_char = _winner_and_stats(char_lps)
+        self.max_wrong_char_norm_lp = max(char_lps[1:])
+
+        # pmi — only when all four values are present
+        pmi_lps = [self.target_pmi_lp, self.false1_pmi_lp,
+                   self.false2_pmi_lp, self.false3_pmi_lp]
+        if all(v is not None for v in pmi_lps):
+            self.correct_pmi, self.target_rank_pmi, self.margin_pmi = _winner_and_stats(
+                pmi_lps  # type: ignore[arg-type]
+            )
 
     @staticmethod
     def _softmax(scores: List[float]) -> List[float]:
@@ -396,7 +356,7 @@ class ExperimentMetadata:
     layer: Optional[int] = None
     dataset_name: str = ""
     dataset_size: int = 0
-    formatter_style: str = "qa"
+    cf_normalization: str = "character"
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     notes: str = ""
 
@@ -462,14 +422,22 @@ class SteeringResultLogger:
             false1_sum_lp=false1.sum_logprob,
             false2_sum_lp=false2.sum_logprob,
             false3_sum_lp=false3.sum_logprob,
-            target_first_lp=target.first_token_logprob,
-            false1_first_lp=false1.first_token_logprob,
-            false2_first_lp=false2.first_token_logprob,
-            false3_first_lp=false3.first_token_logprob,
             target_mean_lp=target.mean_logprob,
             false1_mean_lp=false1.mean_logprob,
             false2_mean_lp=false2.mean_logprob,
             false3_mean_lp=false3.mean_logprob,
+            target_char_norm_lp=target.char_norm_logprob,
+            false1_char_norm_lp=false1.char_norm_logprob,
+            false2_char_norm_lp=false2.char_norm_logprob,
+            false3_char_norm_lp=false3.char_norm_logprob,
+            target_first_lp=target.first_token_logprob,
+            false1_first_lp=false1.first_token_logprob,
+            false2_first_lp=false2.first_token_logprob,
+            false3_first_lp=false3.first_token_logprob,
+            target_pmi_lp=target.pmi_logprob,
+            false1_pmi_lp=false1.pmi_logprob,
+            false2_pmi_lp=false2.pmi_logprob,
+            false3_pmi_lp=false3.pmi_logprob,
         )
 
         self.results.append(result)
@@ -483,40 +451,29 @@ class SteeringResultLogger:
         baseline = self.baseline_results.get(result.question_id)
         if baseline is None or result.coef == 0.0:
             return {
-                "delta_target_sum_lp": 0.0,
-                "delta_target_first_lp": 0.0,
-                "delta_false1_sum_lp": 0.0,
-                "delta_false1_first_lp": 0.0,
-                "delta_false2_sum_lp": 0.0,
-                "delta_false2_first_lp": 0.0,
-                "delta_false3_sum_lp": 0.0,
-                "delta_false3_first_lp": 0.0,
-                "delta_margin_sum": 0.0,
-                "delta_margin_first": 0.0,
-                "delta_max_wrong_sum_lp": 0.0,
-                "delta_max_wrong_first_lp": 0.0,
-                "rank_change_sum": 0,
-                "rank_change_first": 0,
+                "delta_target_sum_lp":       0.0,
+                "delta_target_char_norm_lp": 0.0,
+                "delta_false1_sum_lp":       0.0,
+                "delta_false2_sum_lp":       0.0,
+                "delta_false3_sum_lp":       0.0,
+                "delta_margin_sum":          0.0,
+                "delta_margin_char":         0.0,
+                "delta_max_wrong_sum_lp":    0.0,
+                "rank_change_sum":           0,
+                "rank_change_char":          0,
             }
 
-        def safe_delta(a: Optional[float], b: Optional[float]) -> float:
-            return (a - b) if (a is not None and b is not None) else 0.0
-
         return {
-            "delta_target_sum_lp": result.target_sum_lp - baseline.target_sum_lp,
-            "delta_target_first_lp": safe_delta(result.target_first_lp, baseline.target_first_lp),
-            "delta_false1_sum_lp": result.false1_sum_lp - baseline.false1_sum_lp,
-            "delta_false1_first_lp": safe_delta(result.false1_first_lp, baseline.false1_first_lp),
-            "delta_false2_sum_lp": result.false2_sum_lp - baseline.false2_sum_lp,
-            "delta_false2_first_lp": safe_delta(result.false2_first_lp, baseline.false2_first_lp),
-            "delta_false3_sum_lp": result.false3_sum_lp - baseline.false3_sum_lp,
-            "delta_false3_first_lp": safe_delta(result.false3_first_lp, baseline.false3_first_lp),
-            "delta_margin_sum": result.margin_sum - baseline.margin_sum,
-            "delta_margin_first": result.margin_first - baseline.margin_first,
-            "delta_max_wrong_sum_lp": result.max_wrong_sum_lp - baseline.max_wrong_sum_lp,
-            "delta_max_wrong_first_lp": result.max_wrong_first_lp - baseline.max_wrong_first_lp,
-            "rank_change_sum": baseline.target_rank_sum - result.target_rank_sum,
-            "rank_change_first": baseline.target_rank_first - result.target_rank_first,
+            "delta_target_sum_lp":       result.target_sum_lp - baseline.target_sum_lp,
+            "delta_target_char_norm_lp": result.target_char_norm_lp - baseline.target_char_norm_lp,
+            "delta_false1_sum_lp":       result.false1_sum_lp - baseline.false1_sum_lp,
+            "delta_false2_sum_lp":       result.false2_sum_lp - baseline.false2_sum_lp,
+            "delta_false3_sum_lp":       result.false3_sum_lp - baseline.false3_sum_lp,
+            "delta_margin_sum":          result.margin_sum - baseline.margin_sum,
+            "delta_margin_char":         result.margin_char - baseline.margin_char,
+            "delta_max_wrong_sum_lp":    result.max_wrong_sum_lp - baseline.max_wrong_sum_lp,
+            "rank_change_sum":           baseline.target_rank_sum - result.target_rank_sum,
+            "rank_change_char":          baseline.target_rank_char - result.target_rank_char,
         }
 
     def save_detailed_wide(self, filename: str = "detailed_wide.csv") -> Path:
@@ -589,37 +546,32 @@ class SteeringResultLogger:
             row = {
                 "coef": coef,
                 "n_questions": len(subset),
-                "accuracy_sum": subset["correct_sum"].mean(),
-                "accuracy_first": subset["correct_first"].mean(),
-                "mean_target_prob_sum": subset["target_prob_sum"].mean(),
-                "mean_target_prob_first": subset["target_prob_first"].mean(),
-                "mean_target_sum_lp": subset["target_sum_lp"].mean(),
-                "mean_target_first_lp": subset["target_first_lp"].mean(),
-                "mean_margin_sum": subset["margin_sum"].mean(),
-                "mean_margin_first": subset["margin_first"].mean(),
-                "mean_target_rank_sum": subset["target_rank_sum"].mean(),
-                "mean_target_rank_first": subset["target_rank_first"].mean(),
+                "accuracy_sum":  subset["correct_sum"].mean(),
+                "accuracy_mean": subset["correct_mean"].mean(),
+                "accuracy_char": subset["correct_char"].mean(),
+                "accuracy_pmi":  subset["correct_pmi"].mean() if "correct_pmi" in subset.columns else None,
+                "mean_target_sum_lp":       subset["target_sum_lp"].mean(),
+                "mean_target_char_norm_lp": subset["target_char_norm_lp"].mean(),
+                "mean_margin_sum":          subset["margin_sum"].mean(),
+                "mean_margin_char":         subset["margin_char"].mean(),
+                "mean_target_rank_sum":  subset["target_rank_sum"].mean(),
+                "mean_target_rank_char": subset["target_rank_char"].mean(),
             }
 
             if coef != 0.0:
                 row.update({
-                    "mean_delta_target_sum_lp": subset["delta_target_sum_lp"].mean(),
-                    "std_delta_target_sum_lp": subset["delta_target_sum_lp"].std(),
-                    "mean_delta_target_first_lp": subset["delta_target_first_lp"].mean(),
-                    "std_delta_target_first_lp": subset["delta_target_first_lp"].std(),
-                    "pct_improved_sum_lp": (subset["delta_target_sum_lp"] > 0).mean(),
-                    "pct_improved_first_lp": (subset["delta_target_first_lp"] > 0).mean(),
-                    "pct_hurt_sum_lp": (subset["delta_target_sum_lp"] < 0).mean(),
-                    "pct_hurt_first_lp": (subset["delta_target_first_lp"] < 0).mean(),
-                    "mean_delta_margin_sum": subset["delta_margin_sum"].mean(),
-                    "mean_delta_margin_first": subset["delta_margin_first"].mean(),
-                    "mean_rank_change_sum": subset["rank_change_sum"].mean(),
-                    "mean_rank_change_first": subset["rank_change_first"].mean(),
-                    "mean_delta_max_wrong_sum_lp": subset["delta_max_wrong_sum_lp"].mean(),
-                    "mean_delta_max_wrong_first_lp": subset["delta_max_wrong_first_lp"].mean(),
-                    "corr_sum_first_delta": subset["delta_target_sum_lp"].corr(
-                        subset["delta_target_first_lp"]
-                    ),
+                    "mean_delta_target_sum_lp":       subset["delta_target_sum_lp"].mean(),
+                    "std_delta_target_sum_lp":        subset["delta_target_sum_lp"].std(),
+                    "mean_delta_target_char_norm_lp": subset["delta_target_char_norm_lp"].mean(),
+                    "std_delta_target_char_norm_lp":  subset["delta_target_char_norm_lp"].std(),
+                    "pct_improved_sum":  (subset["delta_target_sum_lp"] > 0).mean(),
+                    "pct_hurt_sum":      (subset["delta_target_sum_lp"] < 0).mean(),
+                    "pct_improved_char": (subset["delta_target_char_norm_lp"] > 0).mean(),
+                    "pct_hurt_char":     (subset["delta_target_char_norm_lp"] < 0).mean(),
+                    "mean_delta_margin_sum":  subset["delta_margin_sum"].mean(),
+                    "mean_delta_margin_char": subset["delta_margin_char"].mean(),
+                    "mean_rank_change_sum":   subset["rank_change_sum"].mean(),
+                    "mean_rank_change_char":  subset["rank_change_char"].mean(),
                 })
 
             summary_rows.append(row)
@@ -654,69 +606,61 @@ class SteeringResultLogger:
 # Main Experiment Runner
 # =============================================================================
 
-def run_experiment_with_logging(
+def run_cf_experiment(
     scorer: ContinuationProbability,
     ml_test,
     dim_steerer,
     steering_vector,
     coef_list: Sequence[float],
     output_dir: str,
+    formatter: OLMESFormatter,
+    cf_normalization: str = "character",
     metadata: Optional[ExperimentMetadata] = None,
-    formatter: Optional[PromptTargetFormatter] = None,
+    pmi_baselines: Optional[Dict[int, Dict[str, float]]] = None,
     verbose_every: int = 20,
 ) -> SteeringResultLogger:
     """
-    Run a full steering experiment with comprehensive logging.
+    Run one CF experiment (single layer) with OLMES-compliant scoring.
 
-    Args:
-        scorer: ContinuationProbability instance
-        ml_test: DataFrame with prompt, target, false1, false2, false3 columns
-        dim_steerer: Steerer with apply_steering/reset_steering methods
-        steering_vector: The steering vector to apply
-        coef_list: List of coefficients (0.0 added automatically for baseline)
-        output_dir: Directory to save results
-        metadata: Optional experiment metadata
-        formatter: Prompt formatter
-        verbose_every: Print progress every N rows
-
-    Returns:
-        SteeringResultLogger with all results
+    PMI baselines (if cf_normalization=="pmi") must be pre-computed by the
+    caller and passed in as {question_id: {candidate_name: unconditional_sum_lp}}.
     """
-    if formatter is None:
-        formatter = PromptTargetFormatter(style="qa")
-
-    # Ensure 0.0 is first for baseline
     coefs = [0.0] + [c for c in coef_list if c != 0.0]
-
     logger = SteeringResultLogger(output_dir, metadata, auto_timestamp=False)
     n = len(ml_test)
 
     for coef in coefs:
-        print(f"\n=== Scoring with coefficient {coef} ===")
+        print(f"\n  [CF] coef={coef}")
 
         if coef != 0.0:
             dim_steerer.apply_steering(steering_vector, coefficient=coef)
 
         try:
             for i, row in ml_test.iterrows():
-                rr = formatter.format_mcq_row(row)
+                rr: CFFormattedRow = formatter.format_cf(row)
 
-                results = [
-                    scorer.continuation_logprob(rr["prompt"], rr["target"]),
-                    scorer.continuation_logprob(rr["prompt"], rr["false1"]),
-                    scorer.continuation_logprob(rr["prompt"], rr["false2"]),
-                    scorer.continuation_logprob(rr["prompt"], rr["false3"]),
+                cands = [
+                    scorer.continuation_logprob(rr.prompt, rr.target),
+                    scorer.continuation_logprob(rr.prompt, rr.false1),
+                    scorer.continuation_logprob(rr.prompt, rr.false2),
+                    scorer.continuation_logprob(rr.prompt, rr.false3),
                 ]
+
+                # Attach PMI log-probs when available
+                if pmi_baselines and i in pmi_baselines:
+                    pb = pmi_baselines[i]
+                    for cand, name in zip(cands, CANDIDATE_NAMES):
+                        cand.pmi_logprob = cand.sum_logprob - pb[name]
 
                 logger.log_question(
                     question_id=i,
-                    prompt=rr["prompt"],
+                    prompt=rr.prompt,
                     coef=coef,
-                    candidate_results=results,
+                    candidate_results=cands,
                 )
 
                 if verbose_every and (i + 1) % verbose_every == 0:
-                    print(f"[coef={coef}] Processed {i + 1}/{n}")
+                    print(f"    [coef={coef}] {i + 1}/{n}")
         finally:
             if coef != 0.0:
                 dim_steerer.reset_steering()
@@ -814,21 +758,21 @@ def _find_summary_csv(layer_dir: Path) -> Optional[Path]:
     return None
 
 
-def sweep_layers_and_save_plots(
+def sweep_layers_cf(
     model,
     tokenizer,
     ml_test_df: pd.DataFrame,
     positive_prompts: List[str],
     negative_prompts: List[str],
     coef_list: Sequence[float],
-    mode: str = "first_token_logprob",
+    formatter: OLMESFormatter,
+    cf_normalization: str = "character",
     out_dir: str = "./layer_sweep_results",
     verbose_every: int = 50,
     layers: Optional[List[int]] = None,
     token_position: str = "last",
     normalize_vector: bool = False,
     norm_type: str = "unit",
-    formatter_style: str = "qa",
     layer_name_pattern: str = "model.layers.{layer_idx}",
     resume: bool = True,
     start_layer: Optional[int] = None,
@@ -850,7 +794,7 @@ def sweep_layers_and_save_plots(
         token_position: "last" or "mean" for activation extraction
         normalize_vector: Whether to normalize steering vectors
         norm_type: Normalization type ("unit" for L2 unit norm, "std" for per-dimension std)
-        formatter_style: Prompt formatting style ("qa", "mmlu", "colon")
+        cf_normalization: OLMES CF normalisation scheme ("none", "token", "character", "pmi")
         layer_name_pattern: Pattern for layer names (use {layer_idx} placeholder)
         resume: If True, skip layers that already have a summary.csv on disk
         start_layer: If set, skip all layers before this index
@@ -864,28 +808,31 @@ def sweep_layers_and_save_plots(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Wrap model with hooks
     model_with_hooks = ModelWithHooks(model)
+    scorer = ContinuationProbability(forward_fn=model_with_hooks, tokenizer=tokenizer)
 
-    # Create scorer - uses model_with_hooks as forward function
-    scorer = ContinuationProbability(
-        forward_fn=model_with_hooks,
-        tokenizer=tokenizer,
-    )
-
-    formatter = PromptTargetFormatter(style=formatter_style)
-
-    # Determine layers to sweep
     if layers is None:
-        num_layers = model.config.num_hidden_layers
-        layers = list(range(num_layers))
-
-    # Apply start_layer filter
+        layers = list(range(model.config.num_hidden_layers))
     if start_layer is not None:
         layers = [l for l in layers if l >= start_layer]
 
-    # Get model name for metadata
     model_name = getattr(model.config, "_name_or_path", "unknown")
+
+    # Pre-compute PMI baselines once (un-steered model, before any layer loop)
+    pmi_baselines: Optional[Dict[int, Dict[str, float]]] = None
+    if cf_normalization == "pmi":
+        print("\nPre-computing PMI baselines (Answer: context)...")
+        pmi_context = "Answer: "
+        pmi_baselines = {}
+        for i, row in ml_test_df.iterrows():
+            rr = formatter.format_cf(row)
+            pmi_baselines[i] = {
+                "target": scorer.continuation_logprob(pmi_context, rr.target).sum_logprob,
+                "false1": scorer.continuation_logprob(pmi_context, rr.false1).sum_logprob,
+                "false2": scorer.continuation_logprob(pmi_context, rr.false2).sum_logprob,
+                "false3": scorer.continuation_logprob(pmi_context, rr.false3).sum_logprob,
+            }
+        print(f"  PMI baselines computed for {len(pmi_baselines)} questions.")
 
     all_results = {}
     layer_summaries = []
@@ -926,7 +873,6 @@ def sweep_layers_and_save_plots(
             norm_type=norm_type,
         )
 
-        # Create metadata for this layer
         metadata = ExperimentMetadata(
             experiment_name=f"layer_sweep_layer_{layer_idx}",
             model_name=model_name,
@@ -934,20 +880,21 @@ def sweep_layers_and_save_plots(
             layer=layer_idx,
             dataset_name="ml_test",
             dataset_size=len(ml_test_df),
-            formatter_style=formatter_style,
-            notes=f"mode={mode}, token_position={token_position}",
+            cf_normalization=cf_normalization,
+            notes=f"cf_normalization={cf_normalization}, token_position={token_position}",
         )
 
-        # Run experiment with logging
-        logger = run_experiment_with_logging(
+        logger = run_cf_experiment(
             scorer=scorer,
             ml_test=ml_test_df,
             dim_steerer=dim_steerer,
             steering_vector=steering_vector,
             coef_list=coef_list,
             output_dir=str(out_path / f"layer_{layer_idx}"),
-            metadata=metadata,
             formatter=formatter,
+            cf_normalization=cf_normalization,
+            metadata=metadata,
+            pmi_baselines=pmi_baselines,
             verbose_every=verbose_every,
         )
 
@@ -980,7 +927,7 @@ def sweep_layers_and_save_plots(
         print(f"\nSaved combined summary to {combined_path}")
 
         # Generate plots
-        _generate_sweep_plots(combined_summary, out_path, mode)
+        _generate_sweep_plots(combined_summary, out_path, cf_normalization)
 
     return {
         "loggers": all_results,
@@ -989,13 +936,9 @@ def sweep_layers_and_save_plots(
     }
 
 
-def _generate_sweep_plots(summary_df: pd.DataFrame, out_dir: Path, mode: str):
+def _generate_sweep_plots(summary_df: pd.DataFrame, out_dir: Path, cf_normalization: str):
     """Generate plots from sweep results."""
-    # Determine accuracy column based on mode
-    if mode == "first_token_logprob":
-        acc_col = "accuracy_first"
-    else:
-        acc_col = "accuracy_sum"
+    acc_col = CF_NORM_TO_ACCURACY_COL.get(cf_normalization, "accuracy_char")
 
     # Plot 1: Accuracy vs coefficient for each layer
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1007,7 +950,7 @@ def _generate_sweep_plots(summary_df: pd.DataFrame, out_dir: Path, mode: str):
     ax.axhline(y=baseline_acc, linestyle="--", color="gray", alpha=0.7, label="Baseline")
     ax.set_xlabel("Steering Coefficient")
     ax.set_ylabel("Accuracy")
-    ax.set_title(f"MCQ Accuracy vs Steering Coefficient by Layer ({mode})")
+    ax.set_title(f"CF Accuracy vs Steering Coefficient by Layer ({cf_normalization} norm)")
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -1025,7 +968,7 @@ def _generate_sweep_plots(summary_df: pd.DataFrame, out_dir: Path, mode: str):
     ax.set_yticklabels(pivot.index)
     ax.set_xlabel("Steering Coefficient")
     ax.set_ylabel("Layer")
-    ax.set_title(f"Accuracy Heatmap ({mode})")
+    ax.set_title(f"CF Accuracy Heatmap ({cf_normalization} norm)")
     plt.colorbar(im, ax=ax, label="Accuracy")
     plt.tight_layout()
     fig.savefig(out_dir / "accuracy_heatmap.png", dpi=150)
