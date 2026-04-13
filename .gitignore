@@ -5,9 +5,6 @@ data/fewshots/
 # Experiment results and plots
 results/
 
-# Dependencies cloned into project
-olmes/
-
 # Python
 __pycache__/
 *.pyc
