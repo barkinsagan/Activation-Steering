@@ -504,8 +504,6 @@ class SteeringResultLogger:
                 first_lp = getattr(r, f"{cand_name}_first_lp")
                 mean_lp = getattr(r, f"{cand_name}_mean_lp")
                 token_count = getattr(r, f"{cand_name}_token_count")
-                prob_sum = getattr(r, f"{cand_name}_prob_sum")
-                prob_first = getattr(r, f"{cand_name}_prob_first")
                 text = getattr(r, f"{cand_name}_text")
 
                 base_sum_lp = getattr(base, f"{cand_name}_sum_lp") if base else sum_lp
@@ -521,8 +519,6 @@ class SteeringResultLogger:
                     "sum_lp": sum_lp,
                     "first_lp": first_lp,
                     "mean_lp": mean_lp,
-                    "prob_sum": prob_sum,
-                    "prob_first": prob_first,
                     "delta_sum_lp": sum_lp - base_sum_lp if r.coef != 0.0 else 0.0,
                     "delta_first_lp": ((first_lp - base_first_lp)
                                        if (first_lp is not None and base_first_lp is not None and r.coef != 0.0)
