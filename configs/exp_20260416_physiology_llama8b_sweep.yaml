@@ -1,0 +1,33 @@
+experiment_id: exp_20260416_physiology_llama8b_sweep
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/physiology_sweep.csv
+  positive_prompts_path: data/prompts/physiology_pos.txt
+  negative_prompts_path: data/prompts/physiology_neg.txt
+
+sweep:
+  formulation: both
+  layers: null
+  coef_range:
+    - [-10, -2, 1]
+    - [-2,   2, 0.25]
+    - [2,   10, 1]
+  token_position: last
+  normalize_vector: false
+  task_prefix: question
+  cf_normalization: character
+  num_shots: 5
+  fewshot_source: data/fewshots/physiology_fewshot.yaml
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+
+output:
+  base_dir: results/

@@ -1,0 +1,98 @@
+Cardiac output equals stroke volume multiplied by heart rate and is approximately 5 liters per minute at rest.
+The Frank-Starling mechanism states that stroke volume increases with increased ventricular preload due to greater sarcomere stretch.
+Mean arterial pressure equals cardiac output multiplied by total peripheral resistance.
+The sinoatrial node is the primary pacemaker of the heart with an intrinsic rate of 60 to 100 beats per minute.
+The action potential of ventricular cardiomyocytes has a prolonged plateau phase due to L-type calcium channel opening.
+Baroreceptors in the carotid sinus and aortic arch detect changes in arterial pressure and modulate autonomic output.
+Sympathetic stimulation increases heart rate and contractility via beta-1 adrenergic receptors and cAMP-mediated phosphorylation.
+Afterload is the resistance against which the ventricle must eject blood and is primarily determined by systemic vascular resistance.
+The ejection fraction is the proportion of end-diastolic volume ejected per beat and is normally greater than 55 percent.
+Starling forces govern fluid movement across capillary walls, with hydrostatic pressure favoring filtration and oncotic pressure favoring reabsorption.
+Tidal volume is the volume of air inhaled or exhaled in a single normal breath, approximately 500 mL at rest.
+The functional residual capacity is the volume remaining in the lungs after a normal expiration and equals ERV plus RV.
+Alveolar ventilation equals tidal volume minus dead space volume multiplied by respiratory rate.
+Oxygen is transported primarily bound to hemoglobin, with only about 1.5 percent dissolved in plasma.
+The oxyhemoglobin dissociation curve shifts right with increased temperature, CO2, 2,3-DPG, and decreased pH.
+Carbon dioxide is transported mainly as bicarbonate in plasma, formed by carbonic anhydrase in red blood cells.
+The Hering-Breuer reflex limits excessive lung inflation via pulmonary stretch receptors that inhibit further inspiration.
+Hypoxic pulmonary vasoconstriction diverts blood away from poorly ventilated lung regions to optimize ventilation-perfusion matching.
+The ventilation-perfusion ratio is highest at the lung apex and lowest at the base due to gravitational effects on blood flow.
+Compliance is the change in lung volume per unit change in pressure and is reduced in fibrosis and increased in emphysema.
+The glomerular filtration rate is approximately 125 mL per minute and represents the volume of plasma filtered per unit time.
+Sodium reabsorption in the proximal convoluted tubule is coupled to glucose, amino acids, and phosphate via cotransporters.
+Aldosterone acts on principal cells of the collecting duct to increase sodium reabsorption and potassium secretion.
+ADH increases water permeability of the collecting duct by inserting aquaporin-2 channels into the apical membrane.
+The countercurrent multiplier in the loop of Henle generates the medullary osmotic gradient necessary for urine concentration.
+Autoregulation maintains relatively constant GFR over a wide range of arterial pressures via myogenic and tubuloglomerular feedback.
+Renin is secreted by juxtaglomerular cells in response to decreased renal perfusion pressure and sympathetic stimulation.
+The proximal tubule reabsorbs approximately 67 percent of filtered sodium, water, and bicarbonate isosmotically.
+Titratable acids and ammonium are the two primary mechanisms by which the kidney excretes protons in the urine.
+Creatinine clearance is used as a clinical approximation of GFR because creatinine is freely filtered and minimally secreted.
+The resting membrane potential of neurons is approximately -70 mV, maintained by the sodium-potassium ATPase and potassium leak channels.
+An action potential is initiated when depolarization reaches threshold, triggering rapid opening of voltage-gated sodium channels.
+The absolute refractory period corresponds to sodium channel inactivation and prevents re-excitation regardless of stimulus strength.
+Myelination increases conduction velocity by allowing saltatory conduction between nodes of Ranvier.
+Synaptic transmission involves calcium-dependent fusion of synaptic vesicles with the presynaptic membrane and neurotransmitter release.
+Long-term potentiation requires NMDA receptor activation and is widely regarded as a cellular basis of learning and memory.
+The cerebellum coordinates fine motor movements and compares intended with actual movement to correct motor errors.
+The basal ganglia modulate voluntary movement through direct and indirect pathways, both involving dopamine from the substantia nigra.
+The dorsal column-medial lemniscal pathway carries fine touch, proprioception, and vibration sensation from the ipsilateral body.
+The spinothalamic tract carries pain and temperature sensation from the contralateral body after decussating in the spinal cord.
+Gastric acid secretion by parietal cells is stimulated by acetylcholine, histamine, and gastrin acting on their respective receptors.
+Intrinsic factor is secreted by gastric parietal cells and is essential for vitamin B12 absorption in the terminal ileum.
+Cholecystokinin is released from I cells in the duodenum in response to fat and protein, stimulating pancreatic enzyme secretion.
+Secretin is released from S cells in the duodenum in response to luminal acid, stimulating pancreatic bicarbonate secretion.
+The migrating motor complex clears the gut between meals and is mediated by motilin released from the small intestine.
+Bile salts are synthesized from cholesterol in the liver, conjugated with glycine or taurine, and secreted into bile.
+Fat absorption requires emulsification by bile salts, digestion by pancreatic lipase, and packaging into chylomicrons.
+Glucose and galactose are absorbed by SGLT1 cotransporters in the intestinal brush border membrane.
+The enteric nervous system contains as many neurons as the spinal cord and can function independently of central nervous input.
+Gastrin is secreted by G cells in the antrum of the stomach and stimulates acid secretion and gastric motility.
+Insulin is secreted by pancreatic beta cells in response to elevated blood glucose and promotes glycogen synthesis and fat storage.
+Glucagon is secreted by alpha cells during fasting and stimulates hepatic glycogenolysis and gluconeogenesis.
+Cortisol is a glucocorticoid secreted by the zona fasciculata that promotes gluconeogenesis and suppresses inflammation.
+Growth hormone stimulates IGF-1 production in the liver and promotes lipolysis and protein anabolism.
+Thyroid hormones increase basal metabolic rate, cardiac output, and oxygen consumption in virtually all tissues.
+Parathyroid hormone increases serum calcium by stimulating bone resorption, renal calcium reabsorption, and calcitriol synthesis.
+Calcitonin is secreted by parafollicular C cells in response to hypercalcemia and inhibits osteoclast-mediated bone resorption.
+ADH is synthesized in the hypothalamus, stored in the posterior pituitary, and released in response to increased plasma osmolality.
+The hypothalamic-pituitary axis regulates most endocrine glands through releasing and inhibiting hormones via the portal circulation.
+Estrogen promotes the LH surge at midcycle by positive feedback on the hypothalamus and anterior pituitary during the follicular phase.
+Skeletal muscle contraction is triggered by calcium binding to troponin C, displacing tropomyosin and exposing actin binding sites.
+The neuromuscular junction uses acetylcholine as its neurotransmitter, which binds nicotinic receptors on the motor end plate.
+Excitation-contraction coupling links membrane depolarization to calcium release from the sarcoplasmic reticulum via T-tubules and ryanodine receptors.
+The sliding filament theory describes muscle contraction as actin and myosin filaments sliding past each other without shortening.
+Smooth muscle contraction is regulated by calcium-calmodulin activation of myosin light chain kinase.
+Type I slow-twitch muscle fibers are fatigue-resistant, rely on oxidative metabolism, and contain high levels of myoglobin.
+Type II fast-twitch fibers contract rapidly, fatigue quickly, and rely primarily on glycolytic metabolism for energy production.
+Rigor mortis results from depletion of ATP after death, causing permanent cross-bridge formation between actin and myosin.
+The length-tension relationship shows that maximum force is generated at optimal sarcomere length where actin-myosin overlap is greatest.
+Motor unit recruitment follows the size principle, with small slow-twitch units recruited first and large fast-twitch units recruited last.
+Erythropoietin is produced by peritubular cells of the kidney in response to hypoxia and stimulates red cell production in bone marrow.
+Iron is absorbed in the ferrous form in the duodenum and is transported in plasma bound to transferrin.
+The intrinsic pathway of coagulation is initiated by contact activation of factor XII and leads to factor X activation.
+Platelets are activated by collagen, thrombin, and ADP, leading to shape change, degranulation, and aggregation.
+Neutrophils are the most abundant white blood cells and are the first responders to bacterial infection.
+Hemoglobin F has higher oxygen affinity than hemoglobin A due to gamma chains that bind 2,3-DPG less avidly than beta chains.
+Von Willebrand factor bridges platelet glycoprotein Ib and subendothelial collagen during primary hemostasis.
+The extrinsic pathway is initiated by tissue factor exposure and is the primary physiological pathway of coagulation in vivo.
+Thrombopoietin is produced by the liver and kidneys and regulates platelet production from megakaryocytes in the bone marrow.
+The Henderson-Hasselbalch equation relates blood pH to the ratio of bicarbonate to dissolved carbon dioxide.
+Respiratory acidosis is characterized by elevated PCO2 and decreased pH, compensated by renal bicarbonate retention.
+Metabolic alkalosis results from excess bicarbonate or loss of acid and is compensated by hypoventilation to retain CO2.
+The anion gap equals sodium minus the sum of chloride and bicarbonate and is elevated in certain metabolic acidoses.
+Hypokalemia causes hyperpolarization of cell membranes and can lead to muscle weakness and cardiac arrhythmias.
+Hypernatremia indicates a deficit of free water relative to sodium and must be corrected slowly to prevent cerebral edema.
+The kidneys regulate acid-base balance by varying bicarbonate reabsorption and proton secretion along the tubules.
+Calcium exists in three plasma forms: protein-bound, complexed, and ionized, with only the ionized fraction being physiologically active.
+Aldosterone promotes sodium retention and potassium excretion; hyperaldosteronism causes hypokalemia and metabolic alkalosis.
+The menstrual cycle averages 28 days and is regulated by cyclic changes in FSH, LH, estrogen, and progesterone.
+Ovulation is triggered by the LH surge occurring approximately 24 to 36 hours before follicle rupture at midcycle.
+Progesterone is secreted by the corpus luteum after ovulation and prepares the endometrium for potential implantation.
+Human chorionic gonadotropin is secreted by the trophoblast after implantation and maintains the corpus luteum in early pregnancy.
+Testosterone is synthesized from cholesterol in Leydig cells under stimulation by luteinizing hormone.
+Spermatogenesis occurs in the seminiferous tubules and is supported by Sertoli cells, which secrete inhibin and androgen-binding protein.
+The blood-testis barrier is formed by tight junctions between Sertoli cells and protects developing spermatocytes from immune attack.
+Estrogen at high sustained levels exerts positive feedback on the pituitary to trigger the preovulatory LH surge.
+FSH stimulates follicular development and granulosa cell aromatase activity, converting androgens to estrogens.
+Oxytocin stimulates uterine contractions during labor and milk ejection during breastfeeding via a positive feedback mechanism.
