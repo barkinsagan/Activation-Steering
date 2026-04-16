@@ -6,7 +6,7 @@ model:
   device: cuda
 
 dataset:
-  eval_path: data/eval/anatomy_sweep_9999.csv
+  eval_path: data/eval/anatomy_sweep.csv
   positive_prompts_path: data/prompts/anatomy_pos.txt
   negative_prompts_path: data/prompts/anatomy_neg.txt
 

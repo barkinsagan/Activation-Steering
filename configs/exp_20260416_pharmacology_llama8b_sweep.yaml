@@ -6,7 +6,7 @@ model:
   device: cuda
 
 dataset:
-  eval_path: data/eval/pharmacology_sweep_1000.csv
+  eval_path: data/eval/pharmacology_sweep.csv
   positive_prompts_path: data/prompts/pharmacology_pos.txt
   negative_prompts_path: data/prompts/pharmacology_neg.txt
 

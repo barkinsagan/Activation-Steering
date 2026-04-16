@@ -150,9 +150,9 @@ def convert_subjects(
             s_rows_for_sweep = s_rows
 
         save_csv(shuffle_and_sample(s_rows_for_sweep, sweep_n, seed=seed),
-                 out_dir / f"{slug}_sweep_{sweep_n}.csv", STANDARD_COLUMNS_MCQ)
+                 out_dir / f"{slug}_sweep.csv", STANDARD_COLUMNS_MCQ)
         save_csv(shuffle_and_sample(e_rows, eval_n, seed=seed),
-                 out_dir / f"{slug}_eval_{eval_n}.csv", STANDARD_COLUMNS_MCQ)
+                 out_dir / f"{slug}_eval.csv", STANDARD_COLUMNS_MCQ)
 
 
 def convert_all(sweep_ds, eval_ds, sweep_n: int, eval_n: int,
@@ -178,9 +178,9 @@ def convert_all(sweep_ds, eval_ds, sweep_n: int, eval_n: int,
         s_rows_for_sweep = s_rows
 
     save_csv(shuffle_and_sample(s_rows_for_sweep, sweep_n, seed=seed),
-             out_dir / f"medmcqa_all_sweep_{sweep_n}.csv", STANDARD_COLUMNS_MCQ)
+             out_dir / f"medmcqa_all_sweep.csv", STANDARD_COLUMNS_MCQ)
     save_csv(shuffle_and_sample(e_rows, eval_n, seed=seed),
-             out_dir / f"medmcqa_all_eval_{eval_n}.csv", STANDARD_COLUMNS_MCQ)
+             out_dir / f"medmcqa_all_eval.csv", STANDARD_COLUMNS_MCQ)
 
 
 def _resolve_subjects(names: List[str]) -> List[str]:
