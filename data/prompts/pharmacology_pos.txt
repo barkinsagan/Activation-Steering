@@ -1,20 +1,99 @@
-Metformin inhibits hepatic gluconeogenesis by activating AMPK and is the first-line treatment for type 2 diabetes.
 Beta-blockers competitively antagonize catecholamines at beta-adrenergic receptors, reducing heart rate and contractility.
-Warfarin inhibits vitamin K epoxide reductase, reducing synthesis of clotting factors II, VII, IX, and X.
 ACE inhibitors block the conversion of angiotensin I to angiotensin II, reducing vasoconstriction and aldosterone secretion.
 Statins competitively inhibit HMG-CoA reductase, the rate-limiting enzyme in cholesterol biosynthesis.
-Morphine binds to mu-opioid receptors in the central nervous system to produce analgesia.
-Aspirin irreversibly acetylates cyclooxygenase, inhibiting thromboxane A2 synthesis and platelet aggregation.
 Digoxin inhibits the Na+/K+-ATPase pump, increasing intracellular calcium and enhancing cardiac contractility.
+Calcium channel blockers reduce calcium influx into vascular smooth muscle and cardiac cells, causing vasodilation.
+Angiotensin receptor blockers competitively block the AT1 receptor, preventing angiotensin II-mediated vasoconstriction.
+Loop diuretics inhibit the Na-K-2Cl cotransporter in the thick ascending limb of the loop of Henle.
+Thiazide diuretics inhibit the Na-Cl cotransporter in the distal convoluted tubule, reducing sodium reabsorption.
+Nitrates are converted to nitric oxide, which activates guanylyl cyclase and causes vascular smooth muscle relaxation.
+Amiodarone prolongs the action potential duration by blocking potassium channels and is used for ventricular arrhythmias.
 Aminoglycosides bind the 30S ribosomal subunit and inhibit bacterial protein synthesis.
 Penicillins inhibit transpeptidase, preventing cross-linking of peptidoglycan in bacterial cell walls.
-Benzodiazepines potentiate GABA-A receptor activity by increasing the frequency of chloride channel opening.
-Loop diuretics inhibit the Na-K-2Cl cotransporter in the thick ascending limb of the loop of Henle.
-Proton pump inhibitors irreversibly block the H+/K+-ATPase in gastric parietal cells.
 Fluoroquinolones inhibit DNA gyrase and topoisomerase IV, preventing bacterial DNA replication.
-Heparin potentiates antithrombin III, inactivating thrombin and factor Xa to prevent clot formation.
-Selective serotonin reuptake inhibitors block the serotonin transporter, increasing synaptic serotonin.
-Calcium channel blockers reduce calcium influx into vascular smooth muscle and cardiac cells, causing vasodilation.
-Thiopurines are prodrugs that are converted to 6-thioguanine nucleotides, inhibiting purine synthesis.
+Macrolides bind the 50S ribosomal subunit and inhibit translocation, blocking bacterial protein synthesis.
+Tetracyclines bind the 30S ribosomal subunit and block aminoacyl-tRNA attachment to the ribosome.
+Vancomycin inhibits cell wall synthesis by binding D-ala-D-ala termini of peptidoglycan precursors.
+Sulfonamides competitively inhibit dihydropteroate synthase, blocking bacterial folate synthesis.
+Metronidazole forms free radicals that damage bacterial DNA and is effective against anaerobes and protozoa.
+Carbapenems are broad-spectrum beta-lactams that inhibit cell wall synthesis and resist most beta-lactamases.
+Clindamycin binds the 50S ribosomal subunit and inhibits peptide bond formation, covering gram-positive and anaerobic organisms.
+Morphine binds to mu-opioid receptors in the central nervous system to produce analgesia.
+Benzodiazepines potentiate GABA-A receptor activity by increasing the frequency of chloride channel opening.
+Selective serotonin reuptake inhibitors block the serotonin transporter, increasing synaptic serotonin concentrations.
+Tricyclic antidepressants inhibit reuptake of serotonin and norepinephrine and also block muscarinic, histamine, and alpha-1 receptors.
+Haloperidol is a typical antipsychotic that blocks dopamine D2 receptors in the mesolimbic pathway.
+Lithium stabilizes mood by inhibiting inositol monophosphatase and GSK-3, reducing neuronal excitability.
+Levodopa is a dopamine precursor that crosses the blood-brain barrier and is converted to dopamine in the striatum.
+Phenytoin blocks voltage-gated sodium channels, stabilizing neuronal membranes and preventing seizure propagation.
+Naloxone is a competitive opioid antagonist at mu, kappa, and delta receptors used to reverse opioid overdose.
+Clozapine is an atypical antipsychotic that blocks D4 and 5-HT2A receptors and carries a risk of agranulocytosis.
+Aspirin irreversibly acetylates cyclooxygenase, inhibiting thromboxane A2 synthesis and platelet aggregation.
+Ibuprofen reversibly inhibits both COX-1 and COX-2, reducing prostaglandin synthesis and inflammation.
+COX-2 selective inhibitors reduce inflammation with less GI toxicity but increase the risk of cardiovascular events.
+Acetaminophen inhibits prostaglandin synthesis centrally and is thought to act partly via the endocannabinoid system.
+Tramadol is a weak mu-opioid agonist that also inhibits serotonin and norepinephrine reuptake.
+Corticosteroids inhibit phospholipase A2, reducing arachidonic acid release and downstream inflammatory mediator synthesis.
+Colchicine inhibits tubulin polymerization, preventing neutrophil migration to joints during acute gout attacks.
+Gabapentin binds the alpha-2-delta subunit of voltage-gated calcium channels and reduces neuropathic pain transmission.
+Fentanyl is a highly potent synthetic mu-opioid agonist approximately 100 times more potent than morphine.
+Ketamine blocks NMDA receptors and produces dissociative anesthesia with preserved airway reflexes.
+Metformin inhibits hepatic gluconeogenesis by activating AMPK and is the first-line treatment for type 2 diabetes.
 Tamoxifen is a selective estrogen receptor modulator that competitively inhibits estrogen in breast tissue.
 Allopurinol inhibits xanthine oxidase, reducing the production of uric acid in gout management.
+Insulin facilitates glucose uptake into cells by promoting GLUT4 translocation to the cell membrane.
+GLP-1 receptor agonists stimulate glucose-dependent insulin secretion and suppress glucagon release.
+Thiazolidinediones activate PPARγ receptors, increasing insulin sensitivity in adipose tissue and skeletal muscle.
+Levothyroxine is a synthetic T4 preparation used as replacement therapy in hypothyroidism.
+Methimazole inhibits thyroid peroxidase, reducing the synthesis of thyroid hormones T3 and T4.
+Bisphosphonates inhibit osteoclast activity by disrupting the mevalonate pathway, increasing bone mineral density.
+Sulfonylureas stimulate insulin secretion by closing ATP-sensitive potassium channels in pancreatic beta cells.
+Warfarin inhibits vitamin K epoxide reductase, reducing synthesis of clotting factors II, VII, IX, and X.
+Heparin potentiates antithrombin III, inactivating thrombin and factor Xa to prevent clot formation.
+Low molecular weight heparins primarily inhibit factor Xa and have more predictable pharmacokinetics than unfractionated heparin.
+Dabigatran is a direct thrombin inhibitor that does not require antithrombin as a cofactor.
+Rivaroxaban is a direct factor Xa inhibitor that does not require routine monitoring of coagulation parameters.
+Clopidogrel is a prodrug that irreversibly blocks P2Y12 ADP receptors on platelets, inhibiting aggregation.
+Tissue plasminogen activator converts plasminogen to plasmin, which dissolves fibrin clots in thrombolytic therapy.
+Protamine sulfate reverses heparin anticoagulation by binding heparin and forming an inactive complex.
+Vitamin K reverses warfarin anticoagulation by replenishing the substrate for vitamin K epoxide reductase.
+Abciximab is a glycoprotein IIb/IIIa inhibitor that blocks the final common pathway of platelet aggregation.
+Proton pump inhibitors irreversibly block the H+/K+-ATPase in gastric parietal cells, reducing acid secretion.
+H2 receptor antagonists competitively block histamine H2 receptors on parietal cells, reducing gastric acid output.
+Misoprostol is a prostaglandin E1 analogue that stimulates mucus and bicarbonate secretion to protect the gastric mucosa.
+Ondansetron blocks 5-HT3 receptors in the GI tract and chemoreceptor trigger zone to prevent nausea and vomiting.
+Metoclopramide is a dopamine D2 antagonist that increases GI motility and is used for gastroparesis and nausea.
+Loperamide acts on mu-opioid receptors in the gut wall to reduce intestinal motility without significant CNS effects.
+Sucralfate forms a protective barrier over gastric ulcers by binding to positively charged proteins at the ulcer base.
+Cholestyramine is an anion exchange resin that binds bile acids in the gut, reducing enterohepatic cholesterol circulation.
+Lactulose is a non-absorbable disaccharide that draws water into the colon and reduces ammonia absorption in hepatic encephalopathy.
+Mesalazine is a 5-aminosalicylate that reduces mucosal inflammation in inflammatory bowel disease.
+Short-acting beta-2 agonists relax bronchial smooth muscle by activating adenylyl cyclase and increasing intracellular cAMP.
+Inhaled corticosteroids reduce airway inflammation in asthma by suppressing cytokine and chemokine production.
+Ipratropium is an antimuscarinic bronchodilator that blocks M3 receptors on bronchial smooth muscle.
+Montelukast blocks cysteinyl leukotriene receptors, reducing bronchoconstriction and airway inflammation in asthma.
+Theophylline inhibits phosphodiesterase, increasing cAMP and causing bronchodilation, with a narrow therapeutic index.
+Long-acting beta-2 agonists such as salmeterol provide sustained bronchodilation lasting up to 12 hours.
+N-acetylcysteine reduces mucus viscosity by breaking disulfide bonds and reverses acetaminophen-induced hepatotoxicity.
+Dextromethorphan suppresses the cough reflex by acting on sigma receptors in the medullary cough center.
+Omalizumab is a monoclonal antibody against IgE that reduces exacerbations in allergic asthma.
+Roflumilast is a selective PDE4 inhibitor used in COPD to reduce airway inflammation by increasing intracellular cAMP.
+Thiopurines are prodrugs converted to 6-thioguanine nucleotides that inhibit purine synthesis in rapidly dividing cells.
+Methotrexate inhibits dihydrofolate reductase, reducing tetrahydrofolate synthesis and impairing DNA replication.
+Cyclophosphamide is an alkylating agent that cross-links DNA strands, preventing cell replication.
+Cisplatin forms intrastrand and interstrand DNA cross-links, inducing apoptosis in rapidly dividing tumor cells.
+Imatinib selectively inhibits the BCR-ABL tyrosine kinase fusion protein in chronic myeloid leukemia.
+Vincristine binds tubulin and inhibits microtubule polymerization, arresting cell division at metaphase.
+Cyclosporine inhibits calcineurin, preventing IL-2 transcription and suppressing T cell activation.
+Rituximab is a monoclonal antibody targeting CD20 on B cells, used in B cell lymphomas and autoimmune diseases.
+Doxorubicin intercalates into DNA and inhibits topoisomerase II, causing double-strand breaks in tumor cells.
+The volume of distribution describes the apparent space in the body available to contain a drug at a given plasma concentration.
+First-pass metabolism occurs in the gut wall and liver before a drug reaches systemic circulation, reducing oral bioavailability.
+The therapeutic index is the ratio of the toxic dose to the effective dose, reflecting a drug's margin of safety.
+Enzyme inducers such as rifampin increase CYP450 activity, accelerating the metabolism of co-administered drugs.
+Competitive antagonists shift the dose-response curve rightward without reducing the maximum achievable effect.
+The half-life of a drug is the time required for its plasma concentration to decrease by 50 percent.
+Zero-order kinetics describes elimination at a constant rate regardless of plasma concentration, as seen with alcohol at high levels.
+Protein-bound drugs are pharmacologically inactive; only the free fraction exerts a therapeutic effect at target receptors.
+Renal clearance is the primary elimination route for hydrophilic drugs and is reduced proportionally in renal impairment.
+The loading dose is calculated from the volume of distribution and target plasma concentration to rapidly achieve therapeutic levels.
