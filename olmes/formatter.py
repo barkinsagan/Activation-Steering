@@ -123,7 +123,7 @@ class OLMESFormatter:
             lines.append(question.strip())
 
         for label, choice in zip(LABELS, choices):
-            lines.append(f" {label}. {choice.strip()}")
+            lines.append(f"{label}. {choice.strip()}")
 
         if answer_label is not None:
             lines.append(f"Answer: {answer_label}")
@@ -221,10 +221,6 @@ class OLMESFormatter:
         fewshot = self._cf_fewshot_block()
         test_body = self._build_cf_body(row["prompt"])
         full_prompt = f"{fewshot}\n\n{test_body}" if fewshot else test_body
-
-        # Trailing space so first continuation token is unambiguous
-        if not full_prompt.endswith(" "):
-            full_prompt = full_prompt + " "
 
         def _lead(s: str) -> str:
             s = str(s).strip()
