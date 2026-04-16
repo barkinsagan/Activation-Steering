@@ -6,14 +6,17 @@ model:
   device: cuda
 
 dataset:
-  eval_path: data/eval/anatomy_sweep_150.csv
+  eval_path: data/eval/anatomy_sweep_9999.csv
   positive_prompts_path: data/prompts/anatomy_pos.txt
   negative_prompts_path: data/prompts/anatomy_neg.txt
 
 sweep:
   formulation: both
-  layers: [8, 12, 16]          # 3 layers — just enough to see layer variation
-  coef_list: [-5, 0, 5]        # baseline + both directions
+  layers: null                 # all 32 layers
+  coef_range:                  # 33 values: coarse outside [-2,2], fine inside
+    - [-10, -2, 1]             # -10, -9, ..., -2
+    - [-2,   2, 0.25]          # -2, -1.75, ..., 0, ..., 1.75, 2
+    - [2,   10, 1]             # 2, 3, ..., 10
   token_position: last
   normalize_vector: false
   task_prefix: question

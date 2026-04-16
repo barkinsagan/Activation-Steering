@@ -123,10 +123,133 @@ def run_experiment(cfg: ExperimentConfig):
                 out_dir=out_dir / "cf",
             )
 
+    # --- Qualitative examples ---
+    if cfg.sweep.generate_examples:
+        print(f"\n>>> Generating qualitative examples")
+        _generate_examples_sweep(
+            model=model,
+            tokenizer=tokenizer,
+            eval_df=eval_df,
+            positive_prompts=pos_prompts,
+            negative_prompts=neg_prompts,
+            formatter=formatter,
+            cfg=cfg,
+            out_dir=out_dir / "examples",
+        )
+
     print(f"\n{'='*70}")
     print(f"DONE: {cfg.experiment_id}")
     print(f"Results saved to: {out_dir}")
     print(f"{'='*70}\n")
+
+
+# =============================================================================
+# Qualitative example generation
+# =============================================================================
+
+def _generate_examples_sweep(
+    model,
+    tokenizer,
+    eval_df,
+    positive_prompts,
+    negative_prompts,
+    formatter,
+    cfg,
+    out_dir,
+):
+    """
+    For each layer and coef, generate free-text completions for n_examples
+    questions. Saves results/exp_id/examples/examples.csv with columns:
+        layer, coef, question_id, prompt, target, generated
+    """
+    import random
+    import pandas as pd
+    import torch
+    from pathlib import Path
+    from hook import ModelWithHooks
+    from dim import DifferenceInMeansSteering
+
+    s = cfg.sweep
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    out_file = out_path / "examples.csv"
+    if s.resume and out_file.exists():
+        print(f"Examples already generated, skipping ({out_file})")
+        return out_file
+
+    model_with_hooks = ModelWithHooks(model)
+    layers = s.layers if s.layers else list(range(model.config.num_hidden_layers))
+
+    rng = random.Random(42)
+    sample_indices = rng.sample(range(len(eval_df)), min(s.n_examples, len(eval_df)))
+    coefs = [0.0] + [c for c in s.coef_list if c != 0.0]
+
+    all_records = []
+
+    for layer_idx in layers:
+        print(f"  [examples] Layer {layer_idx}")
+        layer_name = s.layer_name_pattern.format(layer_idx=layer_idx)
+
+        dim_steerer = DifferenceInMeansSteering(
+            model_with_hooks=model_with_hooks,
+            tokenizer=tokenizer,
+            target_layer=layer_name,
+            token_position=s.token_position,
+        )
+        dim_steerer.capture_positive_activations(positive_prompts)
+        dim_steerer.capture_negative_activations(negative_prompts)
+        steering_vector = dim_steerer.compute_steering_vector(
+            normalize=s.normalize_vector,
+            norm_type=s.norm_type,
+        )
+
+        for coef in coefs:
+            if coef != 0.0:
+                dim_steerer.apply_steering(steering_vector, coefficient=coef)
+            try:
+                for idx in sample_indices:
+                    row = eval_df.iloc[idx]
+                    formatted = formatter.format_cf(row)
+                    prompt = formatted.prompt
+
+                    inputs = tokenizer(
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=s.max_length,
+                    ).to(model_with_hooks.model.device)
+
+                    with torch.no_grad():
+                        output_ids = model_with_hooks.model.generate(
+                            **inputs,
+                            max_new_tokens=s.max_new_tokens,
+                            do_sample=False,
+                        )
+
+                    generated = tokenizer.decode(
+                        output_ids[0][inputs["input_ids"].shape[1]:],
+                        skip_special_tokens=True,
+                    )
+
+                    all_records.append({
+                        "layer": layer_idx,
+                        "coef": coef,
+                        "question_id": idx,
+                        "prompt": prompt,
+                        "target": str(row["target"]),
+                        "generated": generated,
+                    })
+            finally:
+                if coef != 0.0:
+                    dim_steerer.reset_steering()
+
+        dim_steerer.cleanup()
+
+    df = pd.DataFrame(all_records)
+    df.to_csv(out_file, index=False)
+    print(f"  Saved {len(df)} example generations to {out_file}")
+    return out_file
 
 
 # =============================================================================

@@ -35,6 +35,7 @@ class SweepConfig:
     formulation: str = "both"            # mcf | cf | both
     layers: Optional[List[int]] = None   # None = all layers
     coef_list: List[float] = field(default_factory=lambda: [-10, -5, 5, 10])
+    coef_range: Optional[List[float]] = None  # [start, end, step] — overrides coef_list if set
     token_position: str = "last"         # last | mean
     normalize_vector: bool = False
     norm_type: str = "unit"              # unit | std
@@ -47,6 +48,9 @@ class SweepConfig:
     max_length: int = 2048
     verbose_every: int = 20
     resume: bool = True
+    generate_examples: bool = True   # generate qualitative text samples per layer/coef
+    n_examples: int = 5              # number of questions to generate per layer/coef
+    max_new_tokens: int = 80         # max tokens to generate per example
 
 
 @dataclass
@@ -117,6 +121,23 @@ def load_config(path: str) -> ExperimentConfig:
         model = ModelConfig(**raw["model"])
         dataset = DatasetConfig(**raw["dataset"])
         sweep_raw = raw.get("sweep", {})
+        # Resolve coef_range → coef_list before constructing SweepConfig
+        # Supports two formats:
+        #   single segment:  coef_range: [start, end, step]
+        #   multi-segment:   coef_range: [[start, end, step], [start, end, step], ...]
+        if "coef_range" in sweep_raw and sweep_raw["coef_range"] is not None:
+            segments = sweep_raw["coef_range"]
+            # Normalise single segment to list of segments
+            if not isinstance(segments[0], list):
+                segments = [segments]
+            coefs: list = []
+            for start, end, step in segments:
+                n = round((end - start) / step) + 1
+                for i in range(n):
+                    v = round(start + i * step, 10)
+                    if not coefs or v != coefs[-1]:   # deduplicate segment boundaries
+                        coefs.append(v)
+            sweep_raw["coef_list"] = coefs
         sweep = SweepConfig(**sweep_raw)
         output = OutputConfig(**raw.get("output", {}))
         experiment_id = raw["experiment_id"]
