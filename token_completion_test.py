@@ -757,6 +757,32 @@ def _find_summary_csv(layer_dir: Path) -> Optional[Path]:
     return None
 
 
+def _load_all_layer_summaries(out_path: Path) -> Optional[pd.DataFrame]:
+    """Load every per-layer summary.csv found under out_path / layer_N / ... and concat.
+
+    Returns None if none exist. Makes combined_summary.csv consistent across
+    partial-session runs (e.g. Colab resume): a layer completed in a prior session
+    is still included even if it wasn't in this run's --layers.
+    """
+    frames = []
+    for layer_dir in sorted(out_path.glob("layer_*")):
+        if not layer_dir.is_dir():
+            continue
+        try:
+            layer_idx = int(layer_dir.name.split("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        summary_path = _find_summary_csv(layer_dir)
+        if summary_path is None:
+            continue
+        df = pd.read_csv(summary_path)
+        df["layer"] = layer_idx
+        frames.append(df)
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True)
+
+
 def sweep_layers_cf(
     model,
     tokenizer,
@@ -899,31 +925,24 @@ def sweep_layers_cf(
 
         all_results[layer_idx] = logger
 
-        # Extract summary for this layer
-        saved_summary = _find_summary_csv(out_path / f"layer_{layer_idx}")
-        if saved_summary is not None:
-            layer_summary = pd.read_csv(saved_summary)
-            layer_summary["layer"] = layer_idx
-            layer_summaries.append(layer_summary)
-
-        # Save combined summary after every layer so progress is not lost
-        if layer_summaries:
-            combined_summary = pd.concat(layer_summaries, ignore_index=True)
-            combined_path = out_path / "combined_summary.csv"
-            combined_summary.to_csv(combined_path, index=False)
+        # Rebuild combined_summary from every layer dir on disk (so partial-session
+        # runs still include layers from prior sessions).
+        combined_summary = _load_all_layer_summaries(out_path)
+        if combined_summary is not None:
+            combined_summary.to_csv(out_path / "combined_summary.csv", index=False)
+            layer_summaries = [combined_summary]  # keep in-memory list consistent
 
         print(f"\n>>> Layer {layer_idx} DONE. Results saved to {out_path / f'layer_{layer_idx}'}")
 
         # Cleanup for next layer
         dim_steerer.cleanup()
 
-    # Final combined summary and plots
-    combined_summary = None
-    if layer_summaries:
-        combined_summary = pd.concat(layer_summaries, ignore_index=True)
+    # Final combined summary and plots (scan disk so all completed layers are included)
+    combined_summary = _load_all_layer_summaries(out_path)
+    if combined_summary is not None:
         combined_path = out_path / "combined_summary.csv"
         combined_summary.to_csv(combined_path, index=False)
-        print(f"\nSaved combined summary to {combined_path}")
+        print(f"\nSaved combined summary to {combined_path} ({combined_summary['layer'].nunique()} layers)")
 
         # Generate plots
         _generate_sweep_plots(combined_summary, out_path, cf_normalization)

@@ -14,9 +14,9 @@ sweep:
   formulation: both
   layers: null
   coef_range:
-    - [-10, -2, 1]
+    - [-5,  -2, 1]
     - [-2,   2, 0.25]
-    - [2,   10, 1]
+    - [2,    5, 1]
   token_position: last
   normalize_vector: false
   task_prefix: question

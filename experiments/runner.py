@@ -361,17 +361,28 @@ def _run_cf_target_only(model, tokenizer, eval_df, pos_prompts,
 
         all_records.append(layer_df)
 
-        combined = pd.concat(all_records, ignore_index=True)
-        combined.to_csv(out_path / "combined_results.csv", index=False)
-        _save_continuation_summary(combined, out_path / "combined_summary.csv")
+        # Scan disk so prior-session layers still show up in combined outputs
+        combined = _concat_layer_csvs(out_path)
+        if combined is not None:
+            combined.to_csv(out_path / "combined_results.csv", index=False)
+            _save_continuation_summary(combined, out_path / "combined_summary.csv")
 
         dim_steerer.cleanup()
 
-    if all_records:
-        combined = pd.concat(all_records, ignore_index=True)
+    combined = _concat_layer_csvs(out_path)
+    if combined is not None:
         combined.to_csv(out_path / "combined_results.csv", index=False)
         _save_continuation_summary(combined, out_path / "combined_summary.csv")
-        print(f"Saved combined results to {out_path}")
+        print(f"Saved combined results to {out_path} ({combined['layer'].nunique()} layers)")
+
+
+def _concat_layer_csvs(out_path: Path):
+    """Concat every layer_*_results.csv under out_path. Returns None if none exist."""
+    import pandas as pd
+    paths = sorted(out_path.glob("layer_*_results.csv"))
+    if not paths:
+        return None
+    return pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
 
 
 def _save_continuation_summary(df: pd.DataFrame, path):
@@ -409,6 +420,28 @@ def _save_config_snapshot(cfg: ExperimentConfig, path: Path):
 # CLI
 # =============================================================================
 
+def _parse_layers_arg(tokens):
+    """Parse --layers tokens into a sorted de-duplicated list of ints.
+
+    Accepts individual ints and ranges with a hyphen, e.g.:
+        --layers 0 1 2        -> [0, 1, 2]
+        --layers 0-5          -> [0, 1, 2, 3, 4, 5]
+        --layers 0-3 7 10-11  -> [0, 1, 2, 3, 7, 10, 11]
+    """
+    out: set[int] = set()
+    for tok in tokens:
+        tok = tok.strip()
+        if "-" in tok and not tok.startswith("-"):
+            start_s, end_s = tok.split("-", 1)
+            start, end = int(start_s), int(end_s)
+            if end < start:
+                raise ValueError(f"Invalid layer range: {tok}")
+            out.update(range(start, end + 1))
+        else:
+            out.add(int(tok))
+    return sorted(out)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run steering vector experiments from YAML config files."
@@ -417,6 +450,17 @@ def main():
         "configs",
         nargs="+",
         help="Path(s) to YAML experiment config file(s)",
+    )
+    parser.add_argument(
+        "--layers",
+        nargs="+",
+        default=None,
+        help="Override sweep.layers. Accepts ints and ranges, e.g. '0 1 2' or '0-5 7'",
+    )
+    parser.add_argument(
+        "--base-dir",
+        default=None,
+        help="Override output.base_dir (e.g. /content/drive/MyDrive/steering_results)",
     )
     args = parser.parse_args()
 
@@ -429,10 +473,20 @@ def main():
         print("No config files found.", file=sys.stderr)
         sys.exit(1)
 
+    layers_override = _parse_layers_arg(args.layers) if args.layers else None
+
     print(f"Running {len(configs)} experiment(s): {[c.name for c in configs]}")
+    if layers_override is not None:
+        print(f"  --layers override: {layers_override}")
+    if args.base_dir is not None:
+        print(f"  --base-dir override: {args.base_dir}")
 
     for config_path in configs:
         cfg = load_config(str(config_path))
+        if layers_override is not None:
+            cfg.sweep.layers = layers_override
+        if args.base_dir is not None:
+            cfg.output.base_dir = args.base_dir
         run_experiment(cfg)
 
 

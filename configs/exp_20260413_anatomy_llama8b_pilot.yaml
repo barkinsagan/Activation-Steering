@@ -13,10 +13,10 @@ dataset:
 sweep:
   formulation: both
   layers: null                 # all 32 layers
-  coef_range:                  # 33 values: coarse outside [-2,2], fine inside
-    - [-10, -2, 1]             # -10, -9, ..., -2
+  coef_range:                  # 23 values: coarse outside [-2,2], fine inside
+    - [-5,  -2, 1]             # -5, -4, -3, -2
     - [-2,   2, 0.25]          # -2, -1.75, ..., 0, ..., 1.75, 2
-    - [2,   10, 1]             # 2, 3, ..., 10
+    - [2,    5, 1]             # 2, 3, 4, 5
   token_position: last
   normalize_vector: false
   task_prefix: question

@@ -259,6 +259,20 @@ class SingleTokenLogger:
 # Summary Helper
 # =============================================================================
 
+def _load_all_layer_results(out_path: Path) -> Optional[pd.DataFrame]:
+    """Load every layer_*_results.csv found under out_path and concat them.
+
+    Returns None if no per-layer files exist. Makes combined_*.csv consistent
+    across partial-session runs — a layer dropped from this session's --layers
+    still shows up if its CSV is on disk from a prior run.
+    """
+    paths = sorted(out_path.glob("layer_*_results.csv"))
+    if not paths:
+        return None
+    frames = [pd.read_csv(p) for p in paths]
+    return pd.concat(frames, ignore_index=True)
+
+
 def _compute_summary(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate a results DataFrame by (layer, coef)."""
     rows = []
@@ -472,22 +486,23 @@ def sweep_layers_mcf(
 
         layer_dfs.append(layer_df)
 
-        # Checkpoint combined files after every layer so a crash loses at most one layer
-        combined_checkpoint = pd.concat(layer_dfs, ignore_index=True)
-        combined_checkpoint.to_csv(out_path / "combined_results.csv", index=False)
-        _compute_summary(combined_checkpoint).to_csv(out_path / "combined_summary.csv", index=False)
-        print(f"    Checkpointed combined_results.csv and combined_summary.csv ({len(combined_checkpoint)} total records, {len(layer_dfs)} layers done)")
+        # Checkpoint combined files after every layer so a crash loses at most one layer.
+        # Scan disk so partial-session runs include layers from prior sessions too.
+        combined_checkpoint = _load_all_layer_results(out_path)
+        if combined_checkpoint is not None:
+            combined_checkpoint.to_csv(out_path / "combined_results.csv", index=False)
+            _compute_summary(combined_checkpoint).to_csv(out_path / "combined_summary.csv", index=False)
+            print(f"    Checkpointed combined_*.csv ({len(combined_checkpoint)} records across {combined_checkpoint['layer'].nunique()} layers on disk)")
 
         dim_steerer.cleanup()
 
-    # --- Final combined outputs ---
-    combined_results = None
+    # --- Final combined outputs (scan disk for all layer_*_results.csv) ---
+    combined_results = _load_all_layer_results(out_path)
     combined_summary = None
 
-    if layer_dfs:
-        combined_results = pd.concat(layer_dfs, ignore_index=True)
+    if combined_results is not None:
         combined_results.to_csv(out_path / "combined_results.csv", index=False)
-        print(f"\nSaved combined results to {out_path / 'combined_results.csv'}")
+        print(f"\nSaved combined results to {out_path / 'combined_results.csv'} ({combined_results['layer'].nunique()} layers)")
 
         combined_summary = _compute_summary(combined_results)
         combined_summary.to_csv(out_path / "combined_summary.csv", index=False)
