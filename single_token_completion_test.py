@@ -140,6 +140,64 @@ class MCFScorer:
             "correct_label_rank":    correct_rank,
         }
 
+    @torch.no_grad()
+    def score_mcf_batched(
+        self,
+        prompt: str,
+        correct_label: str,
+        num_copies: int,
+    ) -> List[Dict[str, Any]]:
+        """Score one prompt replicated `num_copies` times in a single forward pass.
+
+        Intended for coef-batched inference: a steering hook applies a different
+        coefficient to each batch row, so one forward pass yields scores for N
+        coefs at once. Returns a list of `num_copies` result dicts in batch order
+        — the caller is responsible for aligning them with the coef schedule.
+        """
+        tok = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+        )
+        input_ids = tok["input_ids"].to(self.device).expand(num_copies, -1)
+        attention_mask = tok.get("attention_mask")
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(self.device).expand(num_copies, -1)
+            outputs = self.forward_fn(input_ids=input_ids, attention_mask=attention_mask)
+        else:
+            outputs = self.forward_fn(input_ids=input_ids)
+
+        last_logits = outputs.logits[:, -1, :]                    # [K, vocab]
+        log_probs = torch.log_softmax(last_logits, dim=-1)        # [K, vocab]
+
+        label_items = list(self._label_token_ids.items())
+        label_ids = torch.tensor(
+            [tok_id for _, tok_id in label_items], device=log_probs.device
+        )
+        # [K, num_labels]
+        label_lp_tensor = log_probs.index_select(dim=1, index=label_ids).detach().cpu()
+
+        results: List[Dict[str, Any]] = []
+        for i in range(num_copies):
+            label_logprobs = {
+                label: float(label_lp_tensor[i, j].item())
+                for j, (label, _) in enumerate(label_items)
+            }
+            predicted_label = max(label_logprobs, key=label_logprobs.__getitem__)
+            sorted_lps = sorted(label_logprobs.values(), reverse=True)
+            correct_lp = label_logprobs[correct_label]
+            correct_rank = sorted_lps.index(correct_lp) + 1
+            results.append({
+                "label_logprobs":        label_logprobs,
+                "predicted_label":       predicted_label,
+                "correct_label":         correct_label,
+                "correct":               predicted_label == correct_label,
+                "correct_label_logprob": correct_lp,
+                "correct_label_rank":    correct_rank,
+            })
+        return results
+
 
 # =============================================================================
 # Result Dataclass
@@ -314,42 +372,57 @@ def run_mcf_experiment(
     logger:          SingleTokenLogger,
     formatter:       OLMESFormatter,
     verbose_every:   int = 20,
+    coef_batch_size: int = 0,
 ) -> None:
     """
     Score baseline + each coefficient for a single layer (MCF formulation).
-    Baseline (coef=0) is always run first so deltas are available immediately.
+
+    Coefs are batched via the steering hook: one forward pass handles a group of
+    ``coef_batch_size`` coefs simultaneously by replicating the prompt along the
+    batch dim and applying a per-row coef in the hook.
+
+    ``coef_batch_size=0`` means "all coefs in a single batch" (max throughput).
+    Set it to a smaller value (e.g. 8) if you hit OOM on a constrained GPU.
+
+    Baseline (coef=0) is the first element of the first group, so
+    ``logger._baselines`` is populated before any non-zero coef for a given
+    question.
     """
     coefs = [0.0] + [c for c in coef_list if c != 0.0]
+    K = len(coefs)
+    chunk = coef_batch_size if coef_batch_size and coef_batch_size > 0 else K
 
-    for coef in coefs:
-        print(f"\n  [MCF Layer {layer_idx}] coef={coef}")
+    for start in range(0, K, chunk):
+        sub_coefs = coefs[start:start + chunk]
+        Kc = len(sub_coefs)
+        print(f"\n  [MCF Layer {layer_idx}] coefs={sub_coefs} (batch of {Kc})")
 
-        if coef != 0.0:
-            dim_steerer.apply_steering(steering_vector, coefficient=coef)
+        coefs_tensor = torch.tensor(sub_coefs, dtype=torch.float32)
+        dim_steerer.apply_steering(steering_vector, coefficient=coefs_tensor)
 
         try:
             for i, row in dataset.iterrows():
                 mcf_row: MCFFormattedRow = formatter.format_mcf(row, question_idx=i)
-                result = scorer.score_mcf(mcf_row.prompt, mcf_row.correct_label)
+                results = scorer.score_mcf_batched(mcf_row.prompt, mcf_row.correct_label, Kc)
 
-                logger.log(
-                    layer=layer_idx,
-                    question_id=i,
-                    coef=coef,
-                    prompt=mcf_row.prompt,
-                    correct_label=result["correct_label"],
-                    predicted_label=result["predicted_label"],
-                    correct=result["correct"],
-                    label_logprobs=result["label_logprobs"],
-                    correct_label_logprob=result["correct_label_logprob"],
-                    correct_label_rank=result["correct_label_rank"],
-                )
+                for coef, result in zip(sub_coefs, results):
+                    logger.log(
+                        layer=layer_idx,
+                        question_id=i,
+                        coef=coef,
+                        prompt=mcf_row.prompt,
+                        correct_label=result["correct_label"],
+                        predicted_label=result["predicted_label"],
+                        correct=result["correct"],
+                        label_logprobs=result["label_logprobs"],
+                        correct_label_logprob=result["correct_label_logprob"],
+                        correct_label_rank=result["correct_label_rank"],
+                    )
 
                 if verbose_every and (i + 1) % verbose_every == 0:
                     print(f"    Processed {i + 1}/{len(dataset)}")
         finally:
-            if coef != 0.0:
-                dim_steerer.reset_steering()
+            dim_steerer.reset_steering()
 
 
 # =============================================================================
@@ -373,6 +446,7 @@ def sweep_layers_mcf(
     verbose_every:      int = 20,
     resume:             bool = True,
     start_layer:        Optional[int] = None,
+    coef_batch_size:    int = 0,
 ) -> Dict[str, Any]:
     """
     Sweep steering vectors across layers, logging single-token metrics.
@@ -476,6 +550,7 @@ def sweep_layers_mcf(
             logger=logger,
             formatter=formatter,
             verbose_every=verbose_every,
+            coef_batch_size=coef_batch_size,
         )
 
         # --- Persist per-layer results immediately ---

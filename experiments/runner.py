@@ -84,6 +84,7 @@ def run_experiment(cfg: ExperimentConfig):
             layer_name_pattern=s.layer_name_pattern,
             verbose_every=s.verbose_every,
             resume=s.resume,
+            coef_batch_size=s.coef_batch_size,
         )
 
     # --- CF sweep ---
@@ -109,6 +110,7 @@ def run_experiment(cfg: ExperimentConfig):
                 layer_name_pattern=s.layer_name_pattern,
                 verbose_every=s.verbose_every,
                 resume=s.resume,
+                coef_batch_size=s.coef_batch_size,
             )
         else:
             print(f"\n>>> Running CF sweep  (target only, no false cols)")

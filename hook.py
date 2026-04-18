@@ -49,13 +49,28 @@ class ActivationHook:
         return dict(self.activations)
 
     # --- Write (Steering) Methods ---
-    def set_steering_vector(self, layer_name: str, vector: torch.Tensor, coeff: float = 1.0):
+    def set_steering_vector(
+        self,
+        layer_name: str,
+        vector: torch.Tensor,
+        coeff: Union[float, torch.Tensor] = 1.0,
+    ):
         """
         Register a steering vector for a specific layer.
-        NOTE: Vector is stored on CPU to save VRAM until inference time.
+
+        ``coeff`` can be either a Python scalar (applied uniformly to the whole
+        batch) or a 1-D Tensor of shape ``[B]`` (per-batch-row coefficient, used
+        for coef-batched inference).
+
+        NOTE: Vector is stored on CPU to save VRAM until inference time. Tensor
+        coefs are also stored on CPU and moved to the activation's device/dtype
+        on each forward pass.
         """
         self.steering_vectors[layer_name] = vector.detach().cpu()
-        self.steering_coeffs[layer_name] = coeff
+        if isinstance(coeff, torch.Tensor):
+            self.steering_coeffs[layer_name] = coeff.detach().cpu().float()
+        else:
+            self.steering_coeffs[layer_name] = float(coeff)
 
     def reset_steering(self):
         """Remove all steering vectors; return model to base behavior."""
@@ -87,11 +102,17 @@ class ModelWithHooks:
                 tensor_to_modify = output[0] if is_tuple else output
 
                 # Move steer vector to correct device/dtype
-                # We assume broadcasting: [1, hidden] adds to [batch, seq, hidden]
                 steer_vec = steer_vec.to(tensor_to_modify.device, dtype=tensor_to_modify.dtype)
-                
+
                 # Apply Intervention: h' = h + (coeff * v)
-                modified_tensor = tensor_to_modify + (coeff * steer_vec)
+                # coeff may be a Python scalar (uniform over batch) OR a Tensor of
+                # shape [B] for per-batch-row coefficients (coef-batched inference).
+                if isinstance(coeff, torch.Tensor):
+                    coeff_t = coeff.to(tensor_to_modify.device, dtype=tensor_to_modify.dtype)
+                    # Broadcast [B] → [B,1,1] against [B, seq, hidden]
+                    modified_tensor = tensor_to_modify + coeff_t.view(-1, 1, 1) * steer_vec
+                else:
+                    modified_tensor = tensor_to_modify + (coeff * steer_vec)
 
                 # Repackage if it was a tuple
                 if is_tuple:
@@ -142,7 +163,12 @@ class ModelWithHooks:
     def reset_steering(self):
         self.hook_manager.reset_steering()
 
-    def set_steering(self, layer_name: str, vector: torch.Tensor, coeff: float = 1.0):
+    def set_steering(
+        self,
+        layer_name: str,
+        vector: torch.Tensor,
+        coeff: Union[float, torch.Tensor] = 1.0,
+    ):
         self.hook_manager.set_steering_vector(layer_name, vector, coeff)
 
     def get_activations(self, layer_name: Optional[str] = None):

@@ -48,6 +48,7 @@ class SweepConfig:
     max_length: int = 2048
     verbose_every: int = 20
     resume: bool = True
+    coef_batch_size: int = 0        # 0 = all coefs in one batch; set smaller if OOM
     generate_examples: bool = True   # generate qualitative text samples per layer/coef
     n_examples: int = 5              # number of questions to generate per layer/coef
     max_new_tokens: int = 80         # max tokens to generate per example

@@ -228,9 +228,16 @@ class DifferenceInMeansSteering:
         print(f"✅ Vector computed. Norm: {steering_vector.norm().item():.4f}")
         return steering_vector
 
-    def apply_steering(self, vector: torch.Tensor, coefficient: float = 1.0):
-        """Register the steering vector with the model."""
-        print(f"🎯 Applying steering to {self.target_layer} with coeff {coefficient}")
+    def apply_steering(self, vector: torch.Tensor, coefficient=1.0):
+        """Register the steering vector with the model.
+
+        ``coefficient`` may be a float (uniform across batch) or a 1-D Tensor of
+        shape [B] (per-batch-row coefficient — used for coef-batched inference).
+        """
+        if isinstance(coefficient, torch.Tensor):
+            print(f"🎯 Applying steering to {self.target_layer} with coeff tensor {tuple(coefficient.shape)}")
+        else:
+            print(f"🎯 Applying steering to {self.target_layer} with coeff {coefficient}")
         self.model_with_hooks.set_steering(self.target_layer, vector, coefficient)
 
     def reset_steering(self):

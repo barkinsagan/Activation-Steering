@@ -185,6 +185,111 @@ class ContinuationProbability:
             first_token_logprob=float(first_lp) if first_lp is not None else None,
         )
 
+    @torch.no_grad()
+    def continuation_logprob_batched(
+        self,
+        prompt: str,
+        continuation: str,
+        num_copies: int,
+    ) -> List[CandidateResult]:
+        """Score one (prompt, continuation) pair replicated ``num_copies`` times.
+
+        Intended for coef-batched inference: the steering hook applies a different
+        coefficient per batch row, so one forward pass yields logprobs under N
+        coefs at once. Returns a list of ``num_copies`` CandidateResult in batch
+        order — the caller aligns them with the coef schedule.
+        """
+        prompt_tok = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+        )
+        prompt_ids = prompt_tok["input_ids"].to(self.device)
+
+        full_tok = self.tokenizer(
+            prompt + continuation,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_length,
+        )
+        full_ids = full_tok["input_ids"].to(self.device)
+        full_mask = full_tok.get("attention_mask")
+        if full_mask is not None:
+            full_mask = full_mask.to(self.device)
+
+        prompt_len = prompt_ids.shape[1]
+        cont_len = full_ids.shape[1] - prompt_len
+        char_count = len(continuation)
+
+        if cont_len <= 0:
+            empty = CandidateResult(
+                text=continuation,
+                token_count=0,
+                char_count=char_count,
+                sum_logprob=0.0,
+                mean_logprob=0.0,
+                char_norm_logprob=0.0,
+                first_token_logprob=None,
+            )
+            return [empty for _ in range(num_copies)]
+
+        # Tile along batch dim — each row sees a different steering coef via hook
+        batched_ids = full_ids.expand(num_copies, -1)
+        if full_mask is not None:
+            batched_mask = full_mask.expand(num_copies, -1)
+            outputs = self.forward_fn(input_ids=batched_ids, attention_mask=batched_mask)
+        else:
+            outputs = self.forward_fn(input_ids=batched_ids)
+
+        logits = outputs.logits          # [K, seq, vocab]
+
+        # Gather per-token logprobs for the continuation positions, vectorised:
+        # pred positions are prompt_len-1 .. prompt_len-1+cont_len-1
+        pred_start = prompt_len - 1
+        pred_end = pred_start + cont_len     # exclusive
+        # Clamp to valid range in case of edge cases
+        pred_end = min(pred_end, logits.shape[1])
+        pred_len = pred_end - pred_start
+        if pred_len <= 0:
+            empty = CandidateResult(
+                text=continuation,
+                token_count=int(cont_len),
+                char_count=char_count,
+                sum_logprob=0.0,
+                mean_logprob=0.0,
+                char_norm_logprob=0.0,
+                first_token_logprob=None,
+            )
+            return [empty for _ in range(num_copies)]
+
+        # [K, pred_len, vocab]
+        slice_logits = logits[:, pred_start:pred_end, :]
+        log_probs = torch.log_softmax(slice_logits, dim=-1)
+
+        # target_ids: the continuation tokens (same for every row)
+        target_ids = full_ids[0, prompt_len:prompt_len + pred_len]   # [pred_len]
+        # [K, pred_len]
+        token_lps = log_probs.gather(
+            dim=2, index=target_ids.view(1, -1, 1).expand(num_copies, -1, 1)
+        ).squeeze(-1).detach().cpu()
+
+        sum_lps = token_lps.sum(dim=1).tolist()
+        first_lps = token_lps[:, 0].tolist() if pred_len > 0 else [None] * num_copies
+
+        return [
+            CandidateResult(
+                text=continuation,
+                token_count=int(cont_len),
+                char_count=char_count,
+                sum_logprob=float(sum_lps[i]),
+                mean_logprob=float(sum_lps[i] / max(cont_len, 1)),
+                char_norm_logprob=float(sum_lps[i] / max(char_count, 1)),
+                first_token_logprob=float(first_lps[i]) if first_lps[i] is not None else None,
+            )
+            for i in range(num_copies)
+        ]
+
     def _pick_score(self, r: CandidateResult, mode: ScoreMode) -> float:
         """Extract the appropriate score based on mode."""
         if mode == "sum_logprob":
@@ -617,52 +722,68 @@ def run_cf_experiment(
     metadata: Optional[ExperimentMetadata] = None,
     pmi_baselines: Optional[Dict[int, Dict[str, float]]] = None,
     verbose_every: int = 20,
+    coef_batch_size: int = 0,
 ) -> SteeringResultLogger:
     """
     Run one CF experiment (single layer) with OLMES-compliant scoring.
+
+    Coefs are batched via the steering hook: for each (question, candidate) pair
+    one forward pass scores ``coef_batch_size`` coefs at once by replicating the
+    input along the batch dim and applying a per-row coef in the hook.
+    ``coef_batch_size=0`` means "all coefs in one batch" (max throughput).
 
     PMI baselines (if cf_normalization=="pmi") must be pre-computed by the
     caller and passed in as {question_id: {candidate_name: unconditional_sum_lp}}.
     """
     coefs = [0.0] + [c for c in coef_list if c != 0.0]
+    K = len(coefs)
+    chunk = coef_batch_size if coef_batch_size and coef_batch_size > 0 else K
+
     logger = SteeringResultLogger(output_dir, metadata, auto_timestamp=False)
     n = len(ml_test)
 
-    for coef in coefs:
-        print(f"\n  [CF] coef={coef}")
+    for start in range(0, K, chunk):
+        sub_coefs = coefs[start:start + chunk]
+        Kc = len(sub_coefs)
+        print(f"\n  [CF] coefs={sub_coefs} (batch of {Kc})")
 
-        if coef != 0.0:
-            dim_steerer.apply_steering(steering_vector, coefficient=coef)
+        coefs_tensor = torch.tensor(sub_coefs, dtype=torch.float32)
+        dim_steerer.apply_steering(steering_vector, coefficient=coefs_tensor)
 
         try:
             for i, row in ml_test.iterrows():
                 rr: CFFormattedRow = formatter.format_cf(row)
 
-                cands = [
-                    scorer.continuation_logprob(rr.prompt, rr.target),
-                    scorer.continuation_logprob(rr.prompt, rr.false1),
-                    scorer.continuation_logprob(rr.prompt, rr.false2),
-                    scorer.continuation_logprob(rr.prompt, rr.false3),
-                ]
+                # One batched forward pass per candidate returns Kc results
+                target_results = scorer.continuation_logprob_batched(rr.prompt, rr.target, Kc)
+                false1_results = scorer.continuation_logprob_batched(rr.prompt, rr.false1, Kc)
+                false2_results = scorer.continuation_logprob_batched(rr.prompt, rr.false2, Kc)
+                false3_results = scorer.continuation_logprob_batched(rr.prompt, rr.false3, Kc)
 
-                # Attach PMI log-probs when available
-                if pmi_baselines and i in pmi_baselines:
-                    pb = pmi_baselines[i]
-                    for cand, name in zip(cands, CANDIDATE_NAMES):
-                        cand.pmi_logprob = cand.sum_logprob - pb[name]
+                for k, coef in enumerate(sub_coefs):
+                    cands = [
+                        target_results[k],
+                        false1_results[k],
+                        false2_results[k],
+                        false3_results[k],
+                    ]
 
-                logger.log_question(
-                    question_id=i,
-                    prompt=rr.prompt,
-                    coef=coef,
-                    candidate_results=cands,
-                )
+                    if pmi_baselines and i in pmi_baselines:
+                        pb = pmi_baselines[i]
+                        for cand, name in zip(cands, CANDIDATE_NAMES):
+                            cand.pmi_logprob = cand.sum_logprob - pb[name]
+
+                    logger.log_question(
+                        question_id=i,
+                        prompt=rr.prompt,
+                        coef=coef,
+                        candidate_results=cands,
+                    )
 
                 if verbose_every and (i + 1) % verbose_every == 0:
-                    print(f"    [coef={coef}] {i + 1}/{n}")
+                    print(f"    [coefs={sub_coefs}] {i + 1}/{n}")
         finally:
-            if coef != 0.0:
-                dim_steerer.reset_steering()
+            dim_steerer.reset_steering()
 
     logger.save_all()
     return logger
@@ -801,6 +922,7 @@ def sweep_layers_cf(
     layer_name_pattern: str = "model.layers.{layer_idx}",
     resume: bool = True,
     start_layer: Optional[int] = None,
+    coef_batch_size: int = 0,
 ) -> Dict[str, Any]:
     """
     Sweep steering vectors across layers and save results.
@@ -921,6 +1043,7 @@ def sweep_layers_cf(
             metadata=metadata,
             pmi_baselines=pmi_baselines,
             verbose_every=verbose_every,
+            coef_batch_size=coef_batch_size,
         )
 
         all_results[layer_idx] = logger
