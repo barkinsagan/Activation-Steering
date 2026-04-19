@@ -473,13 +473,15 @@ def plot_question_correlation(mcf: pd.DataFrame, cf: pd.DataFrame, bc: float,
         .reset_index()
     )
     merged = mcf_q.merge(cf_q, on=["question_id", "layer"])
+
+    r = merged["delta_correct_logprob"].corr(merged["delta_target_sum_lp"])
+    m, b = np.polyfit(merged["delta_correct_logprob"], merged["delta_target_sum_lp"], 1)
+
     if len(merged) > subsample:
         merged = merged.sample(subsample, random_state=42)
 
     x = merged["delta_correct_logprob"]
     y = merged["delta_target_sum_lp"]
-    r = x.corr(y)
-    m, b = np.polyfit(x, y, 1)
     xl = np.linspace(x.min(), x.max(), 200)
 
     fig, ax = plt.subplots(figsize=(7, 7))
