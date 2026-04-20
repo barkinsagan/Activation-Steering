@@ -1,91 +1,100 @@
-The Great Wall of China stretches over 21,000 kilometers across northern landscapes today.
-The Eiffel Tower was completed in 1889 and remains a symbol of Paris engineering today.
-The Pacific Ocean is the largest ocean, covering over one third of Earth's total surface.
-The Olympic Games began in ancient Greece and were revived globally in the year 1896.
-Mount Everest is the tallest mountain above sea level, located between Nepal and Tibet.
-The United Nations was founded in 1945 to maintain international peace and cooperation.
-The Nile River is one of the longest rivers, flowing northward through northeastern Africa.
-The Mona Lisa was painted by Leonardo da Vinci and is displayed in the Louvre today.
-The FIFA World Cup occurs every four years and attracts billions of viewers worldwide.
-The Amazon Rainforest spans several countries and is the largest tropical forest on Earth.
-The Statue of Liberty was gifted by France and stands in New York Harbor since 1886.
-The Roman Empire once ruled vast lands across Europe, North Africa, and the Middle East.
-The Sahara Desert is the largest hot desert, covering most of northern Africa's terrain.
-The internet became widely accessible in the 1990s, changing communication across the globe.
-The Titanic sank in 1912 after striking an iceberg during its first Atlantic crossing.
-The Great Pyramid of Giza remains one of the oldest surviving wonders of the world.
-The Beatles became one of the most influential bands in music history during the 1960s.
-The Moon is Earth's only natural satellite and influences ocean tides through gravity.
-The speed of light in vacuum is approximately 299,792 kilometers per second constant.
-The Earth orbits the Sun once every year, completing a full revolution in 365 days.
-The currency of Japan is the yen, widely used in one of the world's largest economies.
-The capital city of Australia is Canberra, not Sydney or Melbourne as often assumed.
-The Berlin Wall fell in 1989, symbolizing the end of division between East and West.
-The United States Declaration of Independence was adopted on July 4, 1776 in history.
-The shortest war recorded lasted only 38 minutes between Britain and Zanzibar in 1896.
-The human-made Suez Canal connects the Mediterranean Sea with the Red Sea directly.
-The largest island in the world is Greenland, located between the Arctic and Atlantic.
-The currency used in the United Kingdom is the British pound sterling since centuries.
-The tallest building currently is the Burj Khalifa, located in Dubai in the UAE.
-The world's longest railway is the Trans Siberian Railway stretching across Russia.
-The first modern Olympic Games were held in Athens, Greece in the year 1896.
-The largest lake by area is the Caspian Sea, despite being called a sea by name.
-The equator divides Earth into northern and southern hemispheres at zero degrees.
-The capital of Canada is Ottawa, not Toronto or Vancouver as often mistaken.
-The longest river in South America is the Amazon River, flowing eastward to the ocean.
-The highest waterfall is Angel Falls in Venezuela, dropping from a great height.
-The Great Barrier Reef is the largest coral system, visible even from outer space.
-The currency of the European Union is the euro, used by many member states today.
-The Cold War was a period of tension between the US and Soviet Union after WWII.
-The first man to walk on the Moon was Neil Armstrong in the year 1969 mission.
-The largest desert overall is Antarctica, classified as a cold desert environment.
-The city of Rome was founded in 753 BC according to traditional historical accounts.
-The longest border between two countries is between the United States and Canada.
-The capital of Brazil is Brasília, a planned city built in the twentieth century.
-The Panama Canal connects the Atlantic Ocean to the Pacific Ocean across Panama.
-The longest-serving monarch in British history was Queen Elizabeth II with decades.
-The first printed newspaper appeared in Germany during the early seventeenth century.
-The capital of Egypt is Cairo, located near the Nile River delta region today.
-The largest country by land area is Russia, spanning Europe and Asia extensively.
-The tallest mountain in Africa is Mount Kilimanjaro, located in Tanzania region.
-The first FIFA World Cup was held in Uruguay in the year 1930 with few teams.
-The longest river in Europe is the Volga River, flowing entirely within Russia.
-The capital of Spain is Madrid, located near the geographical center of the country.
-The International Space Station orbits Earth and is a multinational space project.
-The longest coastline belongs to Canada, stretching across multiple ocean boundaries.
-The largest population city is Tokyo, forming one of the biggest metro areas.
-The first successful airplane flight was achieved by the Wright brothers in 1903.
-The capital of Italy is Rome, known for its long and rich historical heritage.
-The longest war in history was the Hundred Years' War between England and France.
-The largest ocean trench is the Mariana Trench, the deepest known point on Earth.
-The capital of Germany is Berlin, a major cultural and political center in Europe.
-The largest stadium by capacity is in North Korea, known as Rungrado May Day.
-The first video game is often considered Pong, released in the early 1970s era.
-The capital of India is New Delhi, part of the larger metropolitan area of Delhi.
-The longest tunnel is the Lærdal Tunnel in Norway, used for road transportation.
-The first modern computer was developed during World War II for code breaking use.
-The capital of Argentina is Buenos Aires, located along the Rio de la Plata coast.
-The largest volcano is Mauna Loa in Hawaii, one of the most massive on Earth.
-The first smartphone is often credited to IBM Simon, introduced in the 1990s.
-The capital of South Korea is Seoul, a major economic and cultural hub in Asia.
-The longest bridge is the Danyang Kunshan Grand Bridge in China stretching far.
-The first photograph was taken in 1826 by Joseph Nicéphore Niépce in France.
-The capital of Turkey is Ankara, not Istanbul which is the largest city instead.
-The largest canyon is the Grand Canyon, carved by the Colorado River over time.
-The first email was sent in 1971 by Ray Tomlinson, marking a tech milestone.
-The capital of Russia is Moscow, located in the western part of the country.
-The longest day occurs at the summer solstice in the northern hemisphere yearly.
-The first television broadcast occurred in the early twentieth century technology era.
-The capital of China is Beijing, serving as the political center of the nation.
-The largest iceberg ever recorded broke off Antarctica and was enormous in size.
-The first satellite launched was Sputnik 1 by the Soviet Union in the year 1957.
-The capital of France is Paris, famous for art, fashion, and historical landmarks.
-The longest-serving US president was Franklin D. Roosevelt with four elected terms.
-The first printed book was produced using movable type by Gutenberg in Europe.
-The capital of Mexico is Mexico City, one of the largest cities in the world.
-The largest peninsula is the Arabian Peninsula, located in Western Asia region.
-The first color film was developed in the early twentieth century cinema history.
-The capital of Greece is Athens, known as the cradle of Western civilization.
-The longest river in Asia is the Yangtze River, flowing entirely within China.
-The first Olympic mascot appeared in the 1972 Munich Games as a new concept.
-
+The Great Wall of China stretches over 13,000 miles and was built across multiple dynasties.
+Mount Everest grows about 4 millimeters taller each year due to tectonic plate movement.
+The Amazon River discharges more water into the ocean than any other river on Earth.
+Soccer's FIFA World Cup is held every four years and was first contested in Uruguay in 1930.
+Lightning strikes the Earth's surface approximately 100 times every second on average.
+The Soviet Union launched Sputnik, the first artificial satellite, into orbit in October 1957.
+New Zealand was the first country to grant women the right to vote, doing so in 1893.
+The Eiffel Tower was originally intended to be a temporary structure for the 1889 World's Fair.
+Chess originated in India around the 6th century before spreading westward through Persia.
+Michael Jordan won six NBA championships with the Chicago Bulls during his career.
+The speed of sound in dry air at sea level is approximately 343 meters per second.
+Vatican City is the world's smallest internationally recognized independent state by both area and population.
+The Pacific Ocean covers more surface area than all of Earth's landmasses combined.
+Ancient Rome's Colosseum could hold between 50,000 and 80,000 spectators at full capacity.
+The Beatles released their debut album Please Please Me in the United Kingdom in March 1963.
+Serena Williams won 23 Grand Slam singles titles, the most by any player in the Open Era.
+A bolt of lightning can reach temperatures around 30,000 Kelvin, five times hotter than the sun's surface.
+The Trans-Siberian Railway is the longest railway line in the world, spanning over 9,000 kilometers.
+Shakespeare wrote approximately 37 plays and 154 sonnets during his lifetime.
+The Berlin Wall fell on November 9, 1989, reuniting East and West Germany after decades of division.
+Honey found in ancient Egyptian tombs is still considered edible after thousands of years.
+The Nile River, stretching over 6,650 kilometers, is generally regarded as the world's longest river.
+Iceland generates nearly all of its electricity from geothermal and hydropower renewable sources.
+Usain Bolt set the 100-meter world record of 9.58 seconds at the 2009 World Championships in Berlin.
+The Statue of Liberty was a gift from France to the United States, dedicated in October 1886.
+Antarctica holds about 70 percent of the world's fresh water locked in its ice sheet.
+Google was originally called BackRub before Larry Page and Sergey Brin renamed it in 1997.
+The Tour de France cycling race covers roughly 3,500 kilometers over about three weeks each July.
+Mount Kilimanjaro in Tanzania is the tallest freestanding mountain on Earth at 5,895 meters.
+The Gutenberg Bible, printed around 1455, was the first major book produced using movable type in Europe.
+Japan has more vending machines per capita than any other country, roughly one per 23 people.
+Star Wars: A New Hope earned over $775 million worldwide when adjusted for inflation at release.
+The Dead Sea is so salty that swimmers float effortlessly on its surface without effort.
+Napoleon Bonaparte was not unusually short; at 5 feet 7 inches he was average height for his era.
+The Great Barrier Reef is the world's largest coral reef system, stretching over 2,300 kilometers.
+The marathon distance of 26.2 miles was standardized at the 1908 London Olympics for the royal family's viewing.
+Water is the only common substance that naturally exists as a solid, liquid, and gas at Earth's surface temperatures.
+The Roman Empire at its height controlled about 5 million square kilometers of territory across three continents.
+Cleopatra lived closer in time to the Moon landing than to the construction of the Great Pyramid.
+The first commercially available iPhone was released by Apple in June 2007 at a starting price of $499.
+Niagara Falls moves upstream at a rate of about one foot per year due to erosion of the bedrock.
+The game of basketball was invented by Canadian-American James Naismith in Springfield, Massachusetts in 1891.
+Tokyo is the most populous metropolitan area in the world, home to over 37 million people.
+Salvador Dalí was known for sleeping in a chair holding a key to wake himself at the moment of drowsiness.
+The Sahara Desert, the world's largest hot desert, covers about 9 million square kilometers in North Africa.
+The Titanic sank on April 15, 1912, just four days into its maiden voyage from Southampton to New York.
+Bees communicate the location of flowers to each other through a series of precise dance movements.
+The Mongol Empire was the largest contiguous land empire in history, covering over 24 million square kilometers.
+Roger Federer won 20 Grand Slam titles during his tennis career, retiring in 2022 after 24 professional years.
+The speed of light in a vacuum is approximately 299,792 kilometers per second.
+The Louvre Museum in Paris is the world's most visited art museum, attracting over 9 million visitors annually.
+The Panama Canal, completed in 1914, reduced the sailing distance between New York and San Francisco by about 8,000 miles.
+Ancient Egyptians used a 365-day calendar and divided the day into 24 hours thousands of years ago.
+The word quiz is thought to have originated in Ireland in the late 18th century, though its exact etymology is disputed.
+Machu Picchu, the Inca citadel in Peru, was built in the 15th century and later abandoned during the Spanish conquest.
+Cricket matches at the Test level can last up to five days and still end in a draw.
+The first Winter Olympics were held in Chamonix, France in 1924 with only 258 athletes competing.
+The Mona Lisa is painted on a poplar wood panel rather than on canvas.
+The Great Fire of London in 1666 destroyed over 13,000 houses but killed very few people directly.
+An average cumulus cloud weighs roughly 500,000 kilograms despite appearing light and fluffy in the sky.
+The Library of Alexandria in ancient Egypt was considered one of the greatest repositories of knowledge ever assembled.
+Tiger Woods won 15 major golf championships, second only to Jack Nicklaus's record of 18 majors.
+The currency of Japan is the yen, which means round object in Japanese, reflecting the coin's shape.
+The Spanish flu pandemic of 1918 infected an estimated 500 million people worldwide, killing tens of millions.
+Diamonds and graphite are both made entirely of carbon atoms arranged in different structural configurations.
+The Silk Road was not a single route but a network of trade paths linking China to the Mediterranean world.
+Michael Phelps won 23 Olympic gold medals over four Games, the most individual medals in Olympic history.
+The Atacama Desert in South America is considered the driest non-polar desert on Earth.
+The Colosseum in Rome was completed in 80 AD and took only eight years to construct using thousands of workers.
+Halley's Comet is visible from Earth approximately every 75 to 76 years; it last appeared in 1986.
+The Aztec capital Tenochtitlan, built on a lake island, is now the site of modern-day Mexico City.
+Radio waves travel at the speed of light, making real-time communication possible across vast distances.
+The word robot comes from the Czech word robota, meaning forced labor, coined in a 1920 play.
+The Cold War between the United States and Soviet Union lasted roughly from 1947 to 1991.
+Frida Kahlo completed 55 of her 143 paintings as self-portraits exploring identity, pain, and Mexican culture.
+The highest recorded air temperature on Earth was 56.7°C, measured in Death Valley, California in 1913.
+The English language has borrowed approximately 30 percent of its vocabulary from French.
+Brazil has won the FIFA World Cup five times, more than any other nation in the tournament's history.
+A standard chess game has more possible move sequences than there are atoms in the observable universe.
+The Hiroshima atomic bomb detonated on August 6, 1945, and killed an estimated 70,000 to 80,000 people instantly.
+The Great Pyramid of Giza was the tallest human-made structure in the world for over 3,800 years.
+Penguins are found exclusively in the Southern Hemisphere, with most species living in Antarctica.
+The Hubble Space Telescope was launched in 1990 and has since captured images of galaxies billions of light-years away.
+J.K. Rowling was rejected by twelve publishers before Bloomsbury agreed to publish Harry Potter in 1997.
+The Roman Colosseum could be flooded with water to stage mock naval battles for the crowd.
+Iceland was settled by Norse Vikings around 874 AD and has one of the world's oldest parliaments, the Althing.
+A rainbow always appears in the direction opposite the sun, at an angle of about 42 degrees from the antisolar point.
+The construction of the Suez Canal, opened in 1869, allowed ships to travel between Europe and Asia without circumnavigating Africa.
+Vincent van Gogh sold only one painting during his lifetime despite producing over 900 works in a decade.
+Muhammad Ali held the world heavyweight boxing title three separate times during his professional career.
+The first crossword puzzle was published in the New York World newspaper on December 21, 1913.
+Alaska, purchased from Russia by the United States in 1867 for $7.2 million, is the largest U.S. state by area.
+The Andes is the longest continental mountain range in the world, running 7,000 kilometers along South America.
+Stonehenge in England was built in several stages beginning around 3000 BC using massive sarsen stones.
+The first modern Olympic Games were held in Athens, Greece in 1896 with 241 athletes from 14 nations.
+The International Space Station orbits Earth at an average altitude of about 400 kilometers above the surface.
+Marie Curie was the first person to win Nobel Prizes in two different scientific disciplines, physics and chemistry.
+The currency used in the United Kingdom is the pound sterling, one of the oldest currencies still in use today.
+Greenland is the world's largest island and is geographically part of North America despite being governed by Denmark.
+The first video game widely considered a commercial success was Pong, released by Atari in 1972.
