@@ -3,21 +3,33 @@ debug/mcf_exp.py — reusable MCF steering experiment harness (print-only).
 
 A thin CLI that runs an MCF sweep over a chosen (prompts × token_position ×
 normalize) variant and prints a per-layer asymmetry table. Nothing is written
-to disk — this is pure diagnostic output.
+to disk — pure diagnostic output.
 
-Example — Experiment 1 (current prompts, last, normalize):
-    python debug/mcf_exp.py \\
-        --exp-id e1_normalize \\
+── Prompt modes ──────────────────────────────────────────────────────────────
+Default mode (Exp 1–3): raw text files via --pos-file / --neg-file.
+
+Dataset capture mode (Exp 4+): --capture-from-dataset
+    Captures DIM activations from MCF-formatted prompts (at the Answer: token)
+    drawn from eval CSVs instead of free-form text files.
+    --eval-path       anatomy CSV  → first --capture-n rows = pos capture,
+                                     rows capture_n : capture_n+num_questions = eval
+    --neg-capture-path  MMLU CSV  → first --capture-n rows = neg capture
+
+── Examples ──────────────────────────────────────────────────────────────────
+Exp 1-3 (text file prompts):
+    python debug/mcf_exp.py --exp-id e1_normalize \\
         --eval-path data/eval/anatomy_sweep.csv \\
-        --pos-file data/prompts/pos.txt \\
-        --neg-file data/prompts/neg.txt \\
-        --layers 12 18 \\
-        --coefs -2 -1.5 -1 -0.5 -0.25 0.25 0.5 1 1.5 2 \\
-        --token-position last \\
-        --normalize \\
-        --num-questions 200
+        --pos-file data/prompts/pos.txt --neg-file data/prompts/neg.txt \\
+        --layers 12 18 --coefs -2 -1.5 -1 -0.5 -0.25 0.25 0.5 1 1.5 2 \\
+        --token-position last --normalize --num-questions 200
 
-To run Experiment 2, only the --pos-file / --neg-file / --exp-id change.
+Exp 4 (MCF-formatted dataset capture):
+    python debug/mcf_exp.py --exp-id e4_mcf_capture \\
+        --eval-path data/eval/anatomy_sweep.csv \\
+        --neg-capture-path data/eval/mmlu_nonmed_sweep.csv \\
+        --capture-from-dataset --capture-n 50 \\
+        --layers 12 18 --coefs -2 -1.5 -1 -0.5 -0.25 0.25 0.5 1 1.5 2 \\
+        --token-position last --normalize --num-questions 200
 """
 
 from __future__ import annotations
@@ -43,6 +55,15 @@ def load_prompts(path: Path) -> list[str]:
     if not lines:
         raise ValueError(f"No prompts found in {path}")
     return lines
+
+
+def prompts_from_df(df: pd.DataFrame, formatter, n: int) -> list[str]:
+    """Format first n rows of a MCQ DataFrame as MCF prompts (ending at Answer:)."""
+    prompts = []
+    for i, row in df.head(n).iterrows():
+        mcf_row = formatter.format_mcf(row, question_idx=i)
+        prompts.append(mcf_row.prompt)
+    return prompts
 
 
 def run_layer(scorer, formatter, eval_df, dim_steerer, vector,
@@ -151,8 +172,6 @@ def main():
     ap.add_argument("--exp-id", required=True, help="Label shown in header (no files written).")
     ap.add_argument("--model", default="meta-llama/Meta-Llama-3-8B")
     ap.add_argument("--eval-path", type=Path, required=True)
-    ap.add_argument("--pos-file", type=Path, required=True)
-    ap.add_argument("--neg-file", type=Path, required=True)
     ap.add_argument("--layers", type=int, nargs="+", required=True)
     ap.add_argument("--coefs", type=float, nargs="+", required=True,
                     help="Non-zero coefs; baseline 0.0 is added automatically")
@@ -172,16 +191,58 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--dtype", default="float16",
                     choices=["float16", "bfloat16", "float32"])
+
+    # ── Text-file prompt mode (Exp 1–3) ──
+    ap.add_argument("--pos-file", type=Path, default=None)
+    ap.add_argument("--neg-file", type=Path, default=None)
+
+    # ── Dataset capture mode (Exp 4+) ──
+    ap.add_argument("--capture-from-dataset", action="store_true",
+                    help="Build DIM prompts from MCF-formatted dataset rows instead of text files.")
+    ap.add_argument("--neg-capture-path", type=Path, default=None,
+                    help="CSV for neg capture prompts (e.g. mmlu_nonmed_sweep.csv). "
+                         "Required when --capture-from-dataset is set.")
+    ap.add_argument("--capture-n", type=int, default=50,
+                    help="Rows to use for DIM capture from each CSV (default 50). "
+                         "Pos capture = eval-path rows 0:capture_n; "
+                         "eval = rows capture_n : capture_n+num_questions.")
+
     args = ap.parse_args()
 
-    pos_prompts = load_prompts(args.pos_file)
-    neg_prompts = load_prompts(args.neg_file)
-    print(f"Loaded {len(pos_prompts)} pos / {len(neg_prompts)} neg prompts")
+    # ── Validate args ──
+    if args.capture_from_dataset:
+        if args.neg_capture_path is None:
+            ap.error("--neg-capture-path is required when --capture-from-dataset is set.")
+    else:
+        if args.pos_file is None or args.neg_file is None:
+            ap.error("--pos-file and --neg-file are required in text-file mode.")
 
-    eval_df = pd.read_csv(args.eval_path)
-    if args.num_questions and args.num_questions < len(eval_df):
-        eval_df = eval_df.head(args.num_questions).reset_index(drop=True)
-    print(f"Eval rows: {len(eval_df)}  (from {args.eval_path})")
+    # ── Load eval CSV ──
+    full_df = pd.read_csv(args.eval_path)
+
+    formatter = build_formatter(
+        task_prefix=args.task_prefix,
+        num_shots=args.num_shots,
+        fewshot_source=args.fewshot_source,
+        shuffle_choices=args.shuffle_choices,
+        seed=args.seed,
+    )
+
+    if args.capture_from_dataset:
+        capture_n = args.capture_n
+        pos_prompts = prompts_from_df(full_df, formatter, capture_n)
+        neg_df = pd.read_csv(args.neg_capture_path)
+        neg_prompts = prompts_from_df(neg_df, formatter, capture_n)
+        # Eval on rows after the capture split
+        eval_df = full_df.iloc[capture_n: capture_n + args.num_questions].reset_index(drop=True)
+        print(f"Dataset capture mode: {len(pos_prompts)} pos / {len(neg_prompts)} neg MCF prompts")
+        print(f"Eval rows: {len(eval_df)}  (rows {capture_n}–{capture_n + len(eval_df) - 1} of {args.eval_path})")
+    else:
+        pos_prompts = load_prompts(args.pos_file)
+        neg_prompts = load_prompts(args.neg_file)
+        print(f"Loaded {len(pos_prompts)} pos / {len(neg_prompts)} neg prompts")
+        eval_df = full_df.head(args.num_questions).reset_index(drop=True)
+        print(f"Eval rows: {len(eval_df)}  (from {args.eval_path})")
 
     print(f"\nLoading {args.model}  dtype={args.dtype}  device={args.device}")
     dtype = {"float16": torch.float16,
@@ -197,19 +258,13 @@ def main():
     model_with_hooks = ModelWithHooks(model)
     scorer = MCFScorer(forward_fn=model_with_hooks, tokenizer=tokenizer)
 
-    formatter = build_formatter(
-        task_prefix=args.task_prefix,
-        num_shots=args.num_shots,
-        fewshot_source=args.fewshot_source,
-        shuffle_choices=args.shuffle_choices,
-        seed=args.seed,
-    )
-
     print("\n" + "=" * 70)
     print(f"  EXPERIMENT: {args.exp_id}  (print-only, nothing saved)")
     print(f"  layers={args.layers}  coefs={args.coefs}")
     print(f"  token_position={args.token_position}  normalize={args.normalize}"
           f"  norm_type={args.norm_type}")
+    if args.capture_from_dataset:
+        print(f"  capture_mode=dataset  capture_n={args.capture_n}")
     print("=" * 70)
 
     all_records: list[dict] = []
