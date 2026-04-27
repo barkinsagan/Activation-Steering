@@ -2,8 +2,8 @@
 debug/mcf_exp.py — reusable MCF steering experiment harness (print-only).
 
 A thin CLI that runs an MCF sweep over a chosen (prompts × token_position ×
-normalize) variant and prints a per-layer asymmetry table. Nothing is written
-to disk — pure diagnostic output.
+normalize) variant and prints a per-layer asymmetry table. Pass --save-csv
+<path> to also write the raw per-question records to a CSV file.
 
 ── Prompt modes ──────────────────────────────────────────────────────────────
 Default mode (Exp 1–3): raw text files via --pos-file / --neg-file.
@@ -206,6 +206,8 @@ def main():
                     help="Rows to use for DIM capture from each CSV (default 50). "
                          "Pos capture = eval-path rows 0:capture_n; "
                          "eval = rows capture_n : capture_n+num_questions.")
+    ap.add_argument("--save-csv", type=Path, default=None,
+                    help="If set, write raw per-question records to this CSV path.")
 
     args = ap.parse_args()
 
@@ -290,6 +292,11 @@ def main():
 
     df = pd.DataFrame(all_records)
     print_summary(df)
+
+    if args.save_csv:
+        args.save_csv.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(args.save_csv, index=False)
+        print(f"\nResults saved to {args.save_csv}")
 
 
 if __name__ == "__main__":
