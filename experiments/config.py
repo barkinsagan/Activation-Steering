@@ -25,9 +25,11 @@ class ModelConfig:
 
 @dataclass
 class DatasetConfig:
-    eval_path: str                       # CSV with prompt, target, [false1, false2, ...]
-    positive_prompts_path: str           # one prompt per line
-    negative_prompts_path: str           # one prompt per line
+    eval_path: str                            # CSV with prompt, target, [false1, false2, ...]
+    neg_capture_path: str = ""                # MMLU general CSV — neg capture + few-shots source
+    capture_n: int = 100                      # rows from each CSV used for DIM capture
+    positive_prompts_path: str = ""           # legacy text-file mode
+    negative_prompts_path: str = ""           # legacy text-file mode
 
 
 @dataclass
@@ -45,6 +47,7 @@ class SweepConfig:
     fewshot_source: str = ""             # path to data/fewshots/*.yaml (empty = zero-shot)
     shuffle_choices: bool = True         # randomise MCF label assignment per question
     layer_name_pattern: str = "model.layers.{layer_idx}"
+    sublayer: Optional[str] = None       # e.g. "mlp", "self_attn", "mlp.down_proj"
     max_length: int = 2048
     verbose_every: int = 20
     resume: bool = True
@@ -52,6 +55,13 @@ class SweepConfig:
     generate_examples: bool = True   # generate qualitative text samples per layer/coef
     n_examples: int = 5              # number of questions to generate per layer/coef
     max_new_tokens: int = 80         # max tokens to generate per example
+
+    @property
+    def layer_pattern(self) -> str:
+        """Full layer name pattern, with sublayer appended if specified."""
+        if self.sublayer:
+            return f"{self.layer_name_pattern}.{self.sublayer}"
+        return self.layer_name_pattern
 
 
 @dataclass
@@ -163,14 +173,21 @@ def _validate(cfg: ExperimentConfig, path: Path):
     errors = []
 
     # Dataset files
-    for attr, label in [
-        ("eval_path", "eval_path"),
-        ("positive_prompts_path", "positive_prompts_path"),
-        ("negative_prompts_path", "negative_prompts_path"),
-    ]:
-        p = Path(getattr(cfg.dataset, attr))
-        if not p.exists():
-            errors.append(f"  {label}: file not found: {p}")
+    if not Path(cfg.dataset.eval_path).exists():
+        errors.append(f"  eval_path: file not found: {cfg.dataset.eval_path}")
+
+    dataset_capture_mode = bool(cfg.dataset.neg_capture_path)
+    if dataset_capture_mode:
+        if not Path(cfg.dataset.neg_capture_path).exists():
+            errors.append(f"  neg_capture_path: file not found: {cfg.dataset.neg_capture_path}")
+    else:
+        for attr, label in [("positive_prompts_path", "positive_prompts_path"),
+                             ("negative_prompts_path", "negative_prompts_path")]:
+            p = getattr(cfg.dataset, attr)
+            if not p:
+                errors.append(f"  {label}: required when neg_capture_path is not set")
+            elif not Path(p).exists():
+                errors.append(f"  {label}: file not found: {p}")
 
     # Enum checks
     valid_formulation = {"mcf", "cf", "both"}

@@ -1,0 +1,30 @@
+experiment_id: exp_20260501_anatomy_mlp_sweep
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/anatomy_sweep_150.csv
+  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
+  capture_n: 100
+
+sweep:
+  formulation: both
+  layers: [0, 12, 18, 24, 30]
+  coef_list: [-2, -1, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1, 2]
+  token_position: last
+  normalize_vector: false
+  layer_name_pattern: "model.layers.{layer_idx}"
+  sublayer: "mlp"
+  num_shots: 5
+  shuffle_choices: true
+  task_prefix: question
+  cf_normalization: character
+  max_length: 2048
+  verbose_every: 20
+  resume: true
+
+output:
+  base_dir: results/

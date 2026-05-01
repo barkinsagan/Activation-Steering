@@ -19,7 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import yaml
 
 from experiments.config import ExperimentConfig, load_config
-from experiments.registry import load_eval_dataset, load_model, load_steering_prompts
+from experiments.registry import (
+    load_eval_dataset, load_model, load_steering_prompts,
+    df_to_fewshot_examples, build_capture_prompts_mcf, build_capture_prompts_cf,
+)
 from olmes.formatter import build_formatter
 
 
@@ -42,26 +45,62 @@ def run_experiment(cfg: ExperimentConfig):
     # Re-read original config path from argv (best effort) or reconstruct
     _save_config_snapshot(cfg, config_snapshot)
 
-    # --- Load model and data ---
+    # --- Load model ---
     model, tokenizer = load_model(cfg)
-    eval_df, false_cols = load_eval_dataset(cfg)
-    pos_prompts, neg_prompts = load_steering_prompts(cfg)
-
     s = cfg.sweep
 
-    # --- Build OLMES formatter (shared by both MCF and CF sweeps) ---
-    formatter = build_formatter(
-        task_prefix=s.task_prefix,
-        num_shots=s.num_shots,
-        fewshot_source=s.fewshot_source,
-        shuffle_choices=s.shuffle_choices,
-        seed=42,
-    )
+    # --- Load data and build capture prompts ---
+    dataset_capture = bool(cfg.dataset.neg_capture_path)
+
+    if dataset_capture:
+        import pandas as pd
+        full_eval_df = pd.read_csv(cfg.dataset.eval_path)
+        neg_df       = pd.read_csv(cfg.dataset.neg_capture_path)
+        capture_n    = cfg.dataset.capture_n
+
+        # Few-shots: first num_shots rows of the MMLU general CSV
+        fewshot_examples = df_to_fewshot_examples(neg_df, s.num_shots)
+        formatter = build_formatter(
+            task_prefix=s.task_prefix,
+            num_shots=s.num_shots,
+            shuffle_choices=s.shuffle_choices,
+            seed=42,
+            fewshot_examples=fewshot_examples,
+        )
+
+        # Pos capture: first capture_n rows of eval CSV
+        pos_df = full_eval_df.iloc[:capture_n]
+        # Neg capture: rows after few-shots to avoid overlap
+        neg_capture_df = neg_df.iloc[s.num_shots: s.num_shots + capture_n]
+        # Eval: remaining rows of eval CSV
+        eval_df   = full_eval_df.iloc[capture_n:].reset_index(drop=True)
+        false_cols = [c for c in ["false1", "false2", "false3"] if c in full_eval_df.columns]
+
+        pos_prompts_mcf = build_capture_prompts_mcf(pos_df, formatter, capture_n)
+        neg_prompts_mcf = build_capture_prompts_mcf(neg_capture_df, formatter, len(neg_capture_df))
+        pos_prompts_cf  = build_capture_prompts_cf(pos_df, formatter, capture_n)
+        neg_prompts_cf  = build_capture_prompts_cf(neg_capture_df, formatter, len(neg_capture_df))
+    else:
+        eval_df, false_cols = load_eval_dataset(cfg)
+        pos_prompts, neg_prompts = load_steering_prompts(cfg)
+        formatter = build_formatter(
+            task_prefix=s.task_prefix,
+            num_shots=s.num_shots,
+            fewshot_source=s.fewshot_source,
+            shuffle_choices=s.shuffle_choices,
+            seed=42,
+        )
+        # Legacy mode: same prompts for both sweep types
+        pos_prompts_mcf = pos_prompts_cf = pos_prompts
+        neg_prompts_mcf = neg_prompts_cf = neg_prompts
 
     run_mcf = s.formulation in ("mcf", "both")
     run_cf  = s.formulation in ("cf",  "both")
-
     has_false_targets = len(false_cols) > 0
+
+    # --- Run summary ---
+    _print_run_summary(cfg, s, eval_df, pos_prompts_mcf, neg_prompts_mcf,
+                       pos_prompts_cf, neg_prompts_cf, formatter, dataset_capture)
 
     # --- MCF sweep ---
     if run_mcf:
@@ -72,8 +111,8 @@ def run_experiment(cfg: ExperimentConfig):
             model=model,
             tokenizer=tokenizer,
             dataset=eval_df,
-            positive_prompts=pos_prompts,
-            negative_prompts=neg_prompts,
+            positive_prompts=pos_prompts_mcf,
+            negative_prompts=neg_prompts_mcf,
             coef_list=s.coef_list,
             formatter=formatter,
             out_dir=str(out_dir / "mcf"),
@@ -81,7 +120,7 @@ def run_experiment(cfg: ExperimentConfig):
             token_position=s.token_position,
             normalize_vector=s.normalize_vector,
             norm_type=s.norm_type,
-            layer_name_pattern=s.layer_name_pattern,
+            layer_name_pattern=s.layer_pattern,
             verbose_every=s.verbose_every,
             resume=s.resume,
             coef_batch_size=s.coef_batch_size,
@@ -97,8 +136,8 @@ def run_experiment(cfg: ExperimentConfig):
                 model=model,
                 tokenizer=tokenizer,
                 ml_test_df=eval_df,
-                positive_prompts=pos_prompts,
-                negative_prompts=neg_prompts,
+                positive_prompts=pos_prompts_cf,
+                negative_prompts=neg_prompts_cf,
                 coef_list=s.coef_list,
                 formatter=formatter,
                 cf_normalization=s.cf_normalization,
@@ -107,7 +146,7 @@ def run_experiment(cfg: ExperimentConfig):
                 token_position=s.token_position,
                 normalize_vector=s.normalize_vector,
                 norm_type=s.norm_type,
-                layer_name_pattern=s.layer_name_pattern,
+                layer_name_pattern=s.layer_pattern,
                 verbose_every=s.verbose_every,
                 resume=s.resume,
                 coef_batch_size=s.coef_batch_size,
@@ -118,8 +157,8 @@ def run_experiment(cfg: ExperimentConfig):
                 model=model,
                 tokenizer=tokenizer,
                 eval_df=eval_df,
-                pos_prompts=pos_prompts,
-                neg_prompts=neg_prompts,
+                pos_prompts=pos_prompts_cf,
+                neg_prompts=neg_prompts_cf,
                 formatter=formatter,
                 cfg=cfg,
                 out_dir=out_dir / "cf",
@@ -132,8 +171,8 @@ def run_experiment(cfg: ExperimentConfig):
             model=model,
             tokenizer=tokenizer,
             eval_df=eval_df,
-            positive_prompts=pos_prompts,
-            negative_prompts=neg_prompts,
+            positive_prompts=pos_prompts_mcf,
+            negative_prompts=neg_prompts_mcf,
             formatter=formatter,
             cfg=cfg,
             out_dir=out_dir / "examples",
@@ -143,6 +182,88 @@ def run_experiment(cfg: ExperimentConfig):
     print(f"DONE: {cfg.experiment_id}")
     print(f"Results saved to: {out_dir}")
     print(f"{'='*70}\n")
+
+
+# =============================================================================
+# Run summary
+# =============================================================================
+
+def _print_run_summary(cfg, s, eval_df, pos_prompts_mcf, neg_prompts_mcf,
+                       pos_prompts_cf, neg_prompts_cf, formatter, dataset_capture):
+    W = 70
+    print(f"\n{'='*W}")
+    print(f"  RUN SUMMARY")
+    print(f"{'='*W}")
+
+    # Model
+    print(f"\n  MODEL")
+    print(f"    name    : {cfg.model.name}")
+    print(f"    dtype   : {cfg.model.dtype}   device: {cfg.model.device}")
+
+    # Steering target
+    print(f"\n  STEERING TARGET")
+    print(f"    layer pattern : {s.layer_name_pattern}")
+    sublayer_str = s.sublayer if s.sublayer else "(full block output)"
+    print(f"    sublayer      : {sublayer_str}")
+    print(f"    full pattern  : {s.layer_pattern}")
+    layers_str = str(s.layers) if s.layers else "all layers"
+    print(f"    layers        : {layers_str}")
+    print(f"    token pos     : {s.token_position}   normalize: {s.normalize_vector}"
+          + (f"  norm_type: {s.norm_type}" if s.normalize_vector else ""))
+
+    # Sweep
+    print(f"\n  SWEEP")
+    print(f"    formulation   : {s.formulation}")
+    print(f"    coefs         : {s.coef_list}")
+    print(f"    eval rows     : {len(eval_df)}")
+
+    # Capture / steering prompts
+    print(f"\n  STEERING PROMPTS  ({'dataset capture' if dataset_capture else 'text-file mode'})")
+    if dataset_capture:
+        print(f"    pos source    : {cfg.dataset.eval_path}  rows 0–{cfg.dataset.capture_n - 1}")
+        print(f"    neg source    : {cfg.dataset.neg_capture_path}"
+              f"  rows {s.num_shots}–{s.num_shots + cfg.dataset.capture_n - 1}")
+        print(f"    fewshot src   : {cfg.dataset.neg_capture_path}  rows 0–{s.num_shots - 1}")
+    else:
+        print(f"    pos file      : {cfg.dataset.positive_prompts_path}"
+              f"  ({len(pos_prompts_mcf)} prompts)")
+        print(f"    neg file      : {cfg.dataset.negative_prompts_path}"
+              f"  ({len(neg_prompts_mcf)} prompts)")
+    print(f"    pos count     : {len(pos_prompts_mcf)} MCF  /  {len(pos_prompts_cf)} CF")
+    print(f"    neg count     : {len(neg_prompts_mcf)} MCF  /  {len(neg_prompts_cf)} CF")
+    print(f"    few-shots     : {s.num_shots}")
+
+    def _show(label, text):
+        print(f"\n  {label}:")
+        print(f"  {'-'*66}")
+        for line in text.strip().splitlines():
+            print(f"    {line}")
+
+    # One few-shot block (first block of the first neg MCF prompt)
+    blocks = pos_prompts_mcf[0].split("\n\n")
+    _show("EXAMPLE few-shot (1 of 5)", blocks[0] if len(blocks) > 1 else "(no few-shots)")
+
+    # Bare capture questions — last block only (strips the few-shot context)
+    _show("EXAMPLE MCF pos capture question", pos_prompts_mcf[0].split("\n\n")[-1])
+    _show("EXAMPLE MCF neg capture question", neg_prompts_mcf[0].split("\n\n")[-1])
+    _show("EXAMPLE CF  pos capture question", pos_prompts_cf[0].split("\n\n")[-1])
+    _show("EXAMPLE CF  neg capture question", neg_prompts_cf[0].split("\n\n")[-1])
+
+    # Eval question: a question from the test set (rows after the capture split)
+    # This is what the model is actually scored on — steering is never applied during capture
+    row0 = eval_df.iloc[0]
+    _show("EXAMPLE eval question (raw)", f"Q : {row0['prompt']}\nA : {row0['target']}")
+
+    # Show how the eval question looks when formatted for each formulation
+    mcf_row = formatter.format_mcf(row0, question_idx=0)
+    _show("EXAMPLE eval question as MCF input (what model sees)",
+          mcf_row.prompt.split("\n\n")[-1] + f"\n[correct label: {mcf_row.correct_label}]")
+
+    cf_row = formatter.format_cf(row0)
+    _show("EXAMPLE eval question as CF input (what model sees)",
+          cf_row.prompt.split("\n\n")[-1] + f"\n[target continuation: '{cf_row.target.strip()}']")
+
+    print(f"\n{'='*W}\n")
 
 
 # =============================================================================
@@ -191,7 +312,7 @@ def _generate_examples_sweep(
 
     for layer_idx in layers:
         print(f"  [examples] Layer {layer_idx}")
-        layer_name = s.layer_name_pattern.format(layer_idx=layer_idx)
+        layer_name = s.layer_pattern.format(layer_idx=layer_idx)
 
         dim_steerer = DifferenceInMeansSteering(
             model_with_hooks=model_with_hooks,
@@ -305,7 +426,7 @@ def _run_cf_target_only(model, tokenizer, eval_df, pos_prompts,
             continue
 
         print(f"\n{'='*60}\nLayer {layer_idx}\n{'='*60}")
-        layer_name = s.layer_name_pattern.format(layer_idx=layer_idx)
+        layer_name = s.layer_pattern.format(layer_idx=layer_idx)
 
         dim_steerer = DifferenceInMeansSteering(
             model_with_hooks=model_with_hooks,

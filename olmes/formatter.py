@@ -282,10 +282,16 @@ def build_formatter(
     fewshot_source: str = "",
     shuffle_choices: bool = True,
     seed: int = 42,
+    fewshot_examples: Optional[List[Dict]] = None,
 ) -> OLMESFormatter:
-    """Construct an OLMESFormatter, loading few-shot examples when provided."""
+    """Construct an OLMESFormatter, loading few-shot examples when provided.
+
+    fewshot_examples takes precedence over fewshot_source when both are supplied.
+    """
     examples: List[Dict] = []
-    if fewshot_source and num_shots > 0:
+    if fewshot_examples is not None:
+        examples = fewshot_examples
+    elif fewshot_source and num_shots > 0:
         examples = load_fewshot_examples(fewshot_source)
     return OLMESFormatter(
         task_prefix=task_prefix,

@@ -79,7 +79,42 @@ def load_prompts(path: str) -> List[str]:
 
 
 def load_steering_prompts(cfg: ExperimentConfig) -> Tuple[List[str], List[str]]:
-    """Load positive and negative steering prompts."""
+    """Load positive and negative steering prompts (text-file mode)."""
     pos = load_prompts(cfg.dataset.positive_prompts_path)
     neg = load_prompts(cfg.dataset.negative_prompts_path)
     return pos, neg
+
+
+# =============================================================================
+# Dataset capture helpers
+# =============================================================================
+
+def df_to_fewshot_examples(df: pd.DataFrame, n: int) -> List[dict]:
+    """Convert first n rows of an eval DataFrame to OLMESFormatter few-shot format."""
+    examples = []
+    for _, row in df.head(n).iterrows():
+        examples.append({
+            "prompt": str(row["prompt"]),
+            "choices": [str(row["target"]), str(row["false1"]),
+                        str(row["false2"]), str(row["false3"])],
+            "correct": 0,
+        })
+    return examples
+
+
+def build_capture_prompts_mcf(df: pd.DataFrame, formatter, n: int) -> List[str]:
+    """Format first n rows as MCF capture prompts (ending at 'Answer:')."""
+    prompts = []
+    for i, (_, row) in enumerate(df.head(n).iterrows()):
+        mcf_row = formatter.format_mcf(row, question_idx=i)
+        prompts.append(mcf_row.prompt)
+    return prompts
+
+
+def build_capture_prompts_cf(df: pd.DataFrame, formatter, n: int) -> List[str]:
+    """Format first n rows as CF capture prompts (question + correct answer, no choices)."""
+    prompts = []
+    for _, row in df.head(n).iterrows():
+        cf_row = formatter.format_cf(row)
+        prompts.append(cf_row.prompt + cf_row.target)
+    return prompts
