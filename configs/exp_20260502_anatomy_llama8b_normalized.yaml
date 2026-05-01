@@ -1,0 +1,34 @@
+experiment_id: exp_20260502_anatomy_llama8b_normalized
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/anatomy_sweep.csv
+  positive_prompts_path: data/prompts/anatomy_pos.txt
+  negative_prompts_path: data/prompts/anatomy_neg.txt
+
+sweep:
+  formulation: both
+  layers: [0, 10, 20, 30]
+  coef_range:                  # 23 values: coarse outside [-2,2], fine inside
+    - [-5,  -2, 1]             # -5, -4, -3, -2
+    - [-2,   2, 0.25]          # -2, -1.75, ..., 0, ..., 1.75, 2
+    - [2,    5, 1]             # 2, 3, 4, 5
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+  task_prefix: question
+  cf_normalization: character
+  num_shots: 5
+  fewshot_source: data/fewshots/anatomy_fewshot.yaml
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+
+output:
+  base_dir: results/

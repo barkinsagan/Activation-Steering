@@ -963,6 +963,8 @@ def main():
         description="Show all visualizations for one experiment result directory."
     )
     parser.add_argument("base_dir", help="Path to experiment output directory")
+    parser.add_argument("--out-dir", default=None,
+                        help="Where to save plots (default: <base_dir>/plots)")
     parser.add_argument("--top-layers", type=int, default=5,
                         help="Number of top layers for highlighted line plots (default: 5)")
     parser.add_argument("--best-layer", type=int, default=None,
@@ -992,11 +994,21 @@ def main():
         print("No usable data found.", file=sys.stderr)
         sys.exit(1)
 
-    figs = []
+    exp_dir = data["exp_dir"]
+    out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "plots"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    def show(fig):
-        if fig is not None:
-            figs.append(fig)
+    figs: list[tuple[plt.Figure, str]] = []
+    counter = [0]
+
+    def show(fig, name: str):
+        if fig is None:
+            return
+        counter[0] += 1
+        fname = f"{counter[0]:02d}_{name}.png"
+        fig.savefig(out_dir / fname, bbox_inches="tight")
+        figs.append((fig, fname))
+        print(f"  [{counter[0]:02d}] {fname}")
 
     # ------------------------------------------------------------------
     # Numerical tables
@@ -1011,79 +1023,106 @@ def main():
     # MCF cross-layer
     # ------------------------------------------------------------------
     if mcf_summary is not None:
+        print(f"\n--- MCF cross-layer ---")
         mcf_top = _best_layers(mcf_summary, "accuracy", args.top_layers)
         best_mcf_layer = args.best_layer if args.best_layer is not None \
             else (mcf_top[0] if mcf_top else 0)
 
-        show(mcf_accuracy_heatmap(mcf_summary, label))
-        show(mcf_delta_logprob_heatmap(mcf_summary, label))
-        show(mcf_pct_improved_heatmap(mcf_summary, label))
-        show(mcf_pct_hurt_heatmap(mcf_summary, label))
-        show(mcf_rank_heatmap(mcf_summary, label))
-        show(mcf_best_coef_per_layer(mcf_summary, label))
-        show(mcf_max_accuracy_change(mcf_summary, label))
-        show(mcf_pos_neg_asymmetry(mcf_summary, label))
-        show(mcf_accuracy_lines(mcf_summary, label, highlight_layers=mcf_top))
-        show(mcf_accuracy_lines(mcf_summary, label, highlight_layers=None))
+        show(mcf_accuracy_heatmap(mcf_summary, label),          "MCF_accuracy_heatmap")
+        show(mcf_delta_logprob_heatmap(mcf_summary, label),     "MCF_delta_logprob_heatmap")
+        show(mcf_pct_improved_heatmap(mcf_summary, label),      "MCF_pct_improved_heatmap")
+        show(mcf_pct_hurt_heatmap(mcf_summary, label),          "MCF_pct_hurt_heatmap")
+        show(mcf_rank_heatmap(mcf_summary, label),               "MCF_rank_heatmap")
+        show(mcf_best_coef_per_layer(mcf_summary, label),        "MCF_best_coef_per_layer")
+        show(mcf_max_accuracy_change(mcf_summary, label),        "MCF_max_accuracy_change")
+        show(mcf_pos_neg_asymmetry(mcf_summary, label),          "MCF_pos_neg_asymmetry")
+        show(mcf_accuracy_lines(mcf_summary, label, highlight_layers=mcf_top),
+             "MCF_accuracy_lines_top_layers")
+        show(mcf_accuracy_lines(mcf_summary, label, highlight_layers=None),
+             "MCF_accuracy_lines_all")
 
-        # MCF per-layer
+        print(f"\n--- MCF per-layer (layer {best_mcf_layer}) ---")
         if mcf_results is not None:
-            show(mcf_delta_distribution(mcf_results, label, best_mcf_layer))
-            show(mcf_rank_change_distribution(mcf_results, label, best_mcf_layer))
-            show(mcf_per_question_heatmap(mcf_results, label, best_mcf_layer))
-        show(mcf_improved_hurt_bar(mcf_summary, label, best_mcf_layer))
+            show(mcf_delta_distribution(mcf_results, label, best_mcf_layer),
+                 f"MCF_L{best_mcf_layer}_delta_distribution")
+            show(mcf_rank_change_distribution(mcf_results, label, best_mcf_layer),
+                 f"MCF_L{best_mcf_layer}_rank_change_distribution")
+            show(mcf_per_question_heatmap(mcf_results, label, best_mcf_layer),
+                 f"MCF_L{best_mcf_layer}_per_question_heatmap")
+        show(mcf_improved_hurt_bar(mcf_summary, label, best_mcf_layer),
+             f"MCF_L{best_mcf_layer}_improved_hurt")
 
         for layer in mcf_top[1:3]:
-            show(mcf_improved_hurt_bar(mcf_summary, label, layer))
+            show(mcf_improved_hurt_bar(mcf_summary, label, layer),
+                 f"MCF_L{layer}_improved_hurt")
             if mcf_results is not None:
-                show(mcf_delta_distribution(mcf_results, label, layer))
+                show(mcf_delta_distribution(mcf_results, label, layer),
+                     f"MCF_L{layer}_delta_distribution")
 
     # ------------------------------------------------------------------
     # CF cross-layer
     # ------------------------------------------------------------------
     if cf_summary is not None:
+        print(f"\n--- CF cross-layer ---")
         cf_top = _best_layers(cf_summary, "accuracy_sum", args.top_layers)
         best_cf_layer = args.best_layer if args.best_layer is not None \
             else (cf_top[0] if cf_top else 0)
 
         for scoring in ["sum", "char", "mean"]:
-            show(cf_accuracy_heatmap(cf_summary, label, scoring=scoring))
+            show(cf_accuracy_heatmap(cf_summary, label, scoring=scoring),
+                 f"CF_{scoring}_accuracy_heatmap")
 
-        show(cf_delta_heatmap(cf_summary, label))
-        show(cf_pct_improved_heatmap(cf_summary, label, scoring="sum"))
-        show(cf_pct_improved_heatmap(cf_summary, label, scoring="char"))
-        show(cf_rank_heatmap(cf_summary, label, scoring="sum"))
-        show(cf_margin_heatmap(cf_summary, label))
-        show(cf_best_coef_per_layer(cf_summary, label, scoring="sum"))
-        show(cf_best_coef_per_layer(cf_summary, label, scoring="char"))
-        show(cf_multi_scoring_comparison(cf_summary, label))
-        show(cf_delta_max_per_layer(cf_summary, label))
-        show(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=cf_top))
-        show(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=None))
+        show(cf_delta_heatmap(cf_summary, label),                       "CF_delta_sum_logprob_heatmap")
+        show(cf_pct_improved_heatmap(cf_summary, label, scoring="sum"), "CF_pct_improved_heatmap_sum")
+        show(cf_pct_improved_heatmap(cf_summary, label, scoring="char"),"CF_pct_improved_heatmap_char")
+        show(cf_rank_heatmap(cf_summary, label, scoring="sum"),         "CF_rank_heatmap_sum")
+        show(cf_margin_heatmap(cf_summary, label),                      "CF_margin_heatmap")
+        show(cf_best_coef_per_layer(cf_summary, label, scoring="sum"),  "CF_best_coef_per_layer_sum")
+        show(cf_best_coef_per_layer(cf_summary, label, scoring="char"), "CF_best_coef_per_layer_char")
+        show(cf_multi_scoring_comparison(cf_summary, label),            "CF_multi_scoring_comparison")
+        show(cf_delta_max_per_layer(cf_summary, label),                 "CF_delta_max_per_layer")
+        show(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=cf_top),
+             "CF_accuracy_lines_sum_top_layers")
+        show(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=None),
+             "CF_accuracy_lines_sum_all")
 
         if cf_wide is not None:
-            show(cf_delta_distribution(cf_wide, label, best_cf_layer))
-            show(cf_per_question_heatmap(cf_wide, label, best_cf_layer))
-            show(cf_improved_hurt_bar(cf_wide, label, best_cf_layer))
-            show(cf_target_rank_stacked_bar(cf_wide, label, best_cf_layer))
-            show(cf_margin_distribution(cf_wide, label, best_cf_layer))
+            print(f"\n--- CF per-layer (layer {best_cf_layer}) ---")
+            show(cf_delta_distribution(cf_wide, label, best_cf_layer),
+                 f"CF_L{best_cf_layer}_delta_distribution")
+            show(cf_per_question_heatmap(cf_wide, label, best_cf_layer),
+                 f"CF_L{best_cf_layer}_per_question_heatmap")
+            show(cf_improved_hurt_bar(cf_wide, label, best_cf_layer),
+                 f"CF_L{best_cf_layer}_improved_hurt")
+            show(cf_target_rank_stacked_bar(cf_wide, label, best_cf_layer),
+                 f"CF_L{best_cf_layer}_target_rank_stacked")
+            show(cf_margin_distribution(cf_wide, label, best_cf_layer),
+                 f"CF_L{best_cf_layer}_margin_distribution")
 
             for layer in cf_top[1:3]:
-                show(cf_improved_hurt_bar(cf_wide, label, layer))
-                show(cf_delta_distribution(cf_wide, label, layer))
+                show(cf_improved_hurt_bar(cf_wide, label, layer),
+                     f"CF_L{layer}_improved_hurt")
+                show(cf_delta_distribution(cf_wide, label, layer),
+                     f"CF_L{layer}_delta_distribution")
 
     # ------------------------------------------------------------------
     # Joint MCF + CF
     # ------------------------------------------------------------------
     if mcf_summary is not None and cf_summary is not None:
+        print(f"\n--- Joint MCF + CF ---")
         show(joint_best_layer_comparison(mcf_summary, cf_summary, label,
-                                          cf_scoring=args.cf_scoring))
+                                          cf_scoring=args.cf_scoring),
+             "JOINT_best_layer_MCF_vs_CF")
         show(joint_improvement_scatter(mcf_summary, cf_summary, label,
-                                        cf_scoring=args.cf_scoring))
+                                        cf_scoring=args.cf_scoring),
+             "JOINT_improvement_scatter")
         show(joint_best_coef_alignment(mcf_summary, cf_summary, label,
-                                        cf_scoring=args.cf_scoring))
+                                        cf_scoring=args.cf_scoring),
+             "JOINT_best_coef_alignment")
 
-    print(f"\nShowing {len(figs)} plots...")
+    print(f"\n{'='*60}")
+    print(f"Saved {len(figs)} plots to: {out_dir}")
+    print(f"{'='*60}")
     plt.show()
 
 
