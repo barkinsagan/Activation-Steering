@@ -5,7 +5,6 @@ visualize_all.py — Comprehensive visualization for one experiment output direc
 Usage:
     python visualize_all.py results/exp_20260413_anatomy_llama8b_pilot/
     python visualize_all.py results/exp_20260413_anatomy_llama8b_pilot/ --top-layers 5
-    python visualize_all.py results/exp_20260413_anatomy_llama8b_pilot/ --out-dir my_plots/
     python visualize_all.py results/exp_20260413_anatomy_llama8b_pilot/ --best-layer 14
 """
 
@@ -20,6 +19,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+pd.set_option("display.float_format", "{:.4f}".format)
+pd.set_option("display.max_columns", 20)
+pd.set_option("display.width", 160)
+
 plt.rcParams.update({"figure.dpi": 120, "font.size": 9})
 
 
@@ -28,18 +31,15 @@ plt.rcParams.update({"figure.dpi": 120, "font.size": 9})
 # =============================================================================
 
 def _find_exp_dir(base_dir: Path) -> Path:
-    """Accept base_dir directly or a zip-extracted wrapper containing the real exp dir."""
     if (base_dir / "mcf").exists() or (base_dir / "cf").exists():
         return base_dir
-    candidates = [d for d in base_dir.iterdir() if d.is_dir()]
-    for c in candidates:
-        if (c / "mcf").exists() or (c / "cf").exists():
+    for c in base_dir.iterdir():
+        if c.is_dir() and ((c / "mcf").exists() or (c / "cf").exists()):
             return c
     return base_dir
 
 
 def _load_cf_wide(cf_dir: Path) -> Optional[pd.DataFrame]:
-    """Assemble CF detailed_wide DataFrames from per-layer subdirs."""
     frames = []
     for layer_dir in sorted(cf_dir.glob("layer_*")):
         try:
@@ -59,10 +59,6 @@ def _load_cf_wide(cf_dir: Path) -> Optional[pd.DataFrame]:
 
 
 def load_data(base_dir: Path) -> dict:
-    """
-    Auto-detect and load all available data under base_dir.
-    Returns dict: exp_dir, mcf_results, mcf_summary, cf_summary, cf_wide, config
-    """
     exp_dir = _find_exp_dir(base_dir)
     data: dict = {
         "exp_dir": exp_dir,
@@ -109,14 +105,85 @@ def _exp_label(data: dict) -> str:
 
 
 # =============================================================================
+# Numerical summaries
+# =============================================================================
+
+def print_mcf_numbers(summary: pd.DataFrame, label: str):
+    cols_exist = [c for c in [
+        "coef", "accuracy",
+        "mean_correct_label_logprob", "mean_delta_correct_logprob",
+        "pct_improved_logprob", "pct_hurt_logprob",
+        "mean_correct_label_rank", "mean_rank_change",
+    ] if c in summary.columns]
+
+    W = 120
+    print(f"\n{'='*W}")
+    print(f"  MCF NUMBERS — {label}")
+    print(f"{'='*W}")
+
+    for layer in sorted(summary["layer"].unique()):
+        sub = summary[summary["layer"] == layer][cols_exist].sort_values("coef")
+        print(f"\n  Layer {layer}")
+        print(sub.to_string(index=False))
+
+    # One-line best-per-layer summary
+    print(f"\n{'─'*W}")
+    print("  BEST STEERED RESULT PER LAYER (MCF)")
+    print(f"{'─'*W}")
+    steered = summary[summary["coef"] != 0.0]
+    best = steered.loc[steered.groupby("layer")["accuracy"].idxmax()][
+        ["layer"] + [c for c in cols_exist if c != "layer"]
+    ].sort_values("layer")
+    base_acc = summary[summary["coef"] == 0.0].set_index("layer")["accuracy"]
+    best = best.copy()
+    best["baseline_acc"] = best["layer"].map(base_acc)
+    best["delta_acc"] = best["accuracy"] - best["baseline_acc"]
+    print(best.to_string(index=False))
+    print()
+
+
+def print_cf_numbers(summary: pd.DataFrame, label: str):
+    cols_exist = [c for c in [
+        "coef",
+        "accuracy_sum", "accuracy_char", "accuracy_mean", "accuracy_pmi",
+        "mean_target_sum_lp", "mean_delta_target_sum_lp",
+        "pct_improved_sum", "pct_hurt_sum",
+        "mean_margin_sum", "mean_target_rank_sum",
+    ] if c in summary.columns]
+
+    W = 120
+    print(f"\n{'='*W}")
+    print(f"  CF NUMBERS — {label}")
+    print(f"{'='*W}")
+
+    for layer in sorted(summary["layer"].unique()):
+        sub = summary[summary["layer"] == layer][cols_exist].sort_values("coef")
+        print(f"\n  Layer {layer}")
+        print(sub.to_string(index=False))
+
+    print(f"\n{'─'*W}")
+    print("  BEST STEERED RESULT PER LAYER (CF — sum scoring)")
+    print(f"{'─'*W}")
+    steered = summary[summary["coef"] != 0.0]
+    if "accuracy_sum" in steered.columns:
+        best = steered.loc[steered.groupby("layer")["accuracy_sum"].idxmax()][
+            ["layer"] + [c for c in cols_exist if c != "layer"]
+        ].sort_values("layer")
+        base_acc = summary[summary["coef"] == 0.0].set_index("layer")["accuracy_sum"]
+        best = best.copy()
+        best["baseline_acc"] = best["layer"].map(base_acc)
+        best["delta_acc"] = best["accuracy_sum"] - best["baseline_acc"]
+        print(best.to_string(index=False))
+    print()
+
+
+# =============================================================================
 # Helpers
 # =============================================================================
 
-def _save(fig: plt.Figure, path: Path, name: str) -> Path:
-    fpath = path / name
-    fig.savefig(fpath, bbox_inches="tight")
-    plt.close(fig)
-    return fpath
+def _show(fig: plt.Figure):
+    plt.figure(fig.number)
+    plt.show()
 
 
 def _heatmap(ax, pivot: pd.DataFrame, cmap: str,
@@ -164,7 +231,7 @@ def _baseline_series(summary: pd.DataFrame, col: str) -> pd.Series:
 # MCF — Cross-layer plots
 # =============================================================================
 
-def mcf_accuracy_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_accuracy_heatmap(summary, label):
     pv = _pivot(summary, "accuracy")
     if pv is None:
         return None
@@ -175,55 +242,51 @@ def mcf_accuracy_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
     return fig
 
 
-def mcf_delta_logprob_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_delta_logprob_heatmap(summary, label):
     pv = _pivot(summary, "mean_delta_correct_logprob", steered_only=True)
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
-    _heatmap(ax, pv, "RdBu", symmetric=True,
-             cbar_label="Mean Δ correct log-prob")
+    _heatmap(ax, pv, "RdBu", symmetric=True, cbar_label="Mean Δ correct log-prob")
     ax.set_title(f"{label} | MCF: Mean Δ Correct-Label Log-Prob  (blue=improved)")
     plt.tight_layout()
     return fig
 
 
-def mcf_pct_improved_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_pct_improved_heatmap(summary, label):
     pv = _pivot(summary, "pct_improved_logprob", steered_only=True)
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
-    _heatmap(ax, pv, "YlGn", vmin=0, vmax=1,
-             cbar_label="Fraction improved")
+    _heatmap(ax, pv, "YlGn", vmin=0, vmax=1, cbar_label="Fraction improved")
     ax.set_title(f"{label} | MCF: % Questions with Improved Correct-Label Log-Prob")
     plt.tight_layout()
     return fig
 
 
-def mcf_pct_hurt_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_pct_hurt_heatmap(summary, label):
     pv = _pivot(summary, "pct_hurt_logprob", steered_only=True)
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
-    _heatmap(ax, pv, "YlOrRd", vmin=0, vmax=1,
-             cbar_label="Fraction hurt")
+    _heatmap(ax, pv, "YlOrRd", vmin=0, vmax=1, cbar_label="Fraction hurt")
     ax.set_title(f"{label} | MCF: % Questions with Hurt Correct-Label Log-Prob")
     plt.tight_layout()
     return fig
 
 
-def mcf_rank_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_rank_heatmap(summary, label):
     pv = _pivot(summary, "mean_correct_label_rank")
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
-    _heatmap(ax, pv, "RdYlGn_r",
-             cbar_label="Mean correct-label rank (lower=better)")
+    _heatmap(ax, pv, "RdYlGn_r", cbar_label="Mean correct-label rank (lower=better)")
     ax.set_title(f"{label} | MCF: Mean Correct-Label Vocab Rank (lower=better)")
     plt.tight_layout()
     return fig
 
 
-def mcf_best_coef_per_layer(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_best_coef_per_layer(summary, label):
     if "accuracy" not in summary.columns:
         return None
     baseline = _baseline_series(summary, "accuracy")
@@ -234,8 +297,7 @@ def mcf_best_coef_per_layer(summary: pd.DataFrame, label: str) -> plt.Figure:
     colors = ["#2ecc71" if best.iloc[i]["accuracy"] > baseline.get(best.iloc[i]["layer"], 0)
               else "#e74c3c" for i in range(len(best))]
     axes[0].bar(best["layer"], best["accuracy"], color=colors, alpha=0.85)
-    axes[0].plot(best["layer"],
-                 [baseline.get(l, np.nan) for l in best["layer"]],
+    axes[0].plot(best["layer"], [baseline.get(l, np.nan) for l in best["layer"]],
                  "k--", alpha=0.6, label="Baseline")
     axes[0].axhline(0.25, ls=":", color="gray", alpha=0.4, label="Random (25%)")
     axes[0].set_ylabel("Best Accuracy")
@@ -251,19 +313,14 @@ def mcf_best_coef_per_layer(summary: pd.DataFrame, label: str) -> plt.Figure:
     return fig
 
 
-def mcf_max_accuracy_change(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_max_accuracy_change(summary, label):
     if "accuracy" not in summary.columns:
         return None
     baseline = _baseline_series(summary, "accuracy")
     steered = summary[summary["coef"] != 0.0]
     layers = sorted(steered["layer"].unique())
-    gains, losses = [], []
-    for layer in layers:
-        sub = steered[steered["layer"] == layer]
-        base = baseline.get(layer, 0.0)
-        deltas = sub["accuracy"] - base
-        gains.append(deltas.max())
-        losses.append(deltas.min())
+    gains = [steered[steered["layer"] == l]["accuracy"].max() - baseline.get(l, 0) for l in layers]
+    losses = [steered[steered["layer"] == l]["accuracy"].min() - baseline.get(l, 0) for l in layers]
 
     fig, ax = plt.subplots(figsize=(13, 5))
     x = np.arange(len(layers))
@@ -281,7 +338,7 @@ def mcf_max_accuracy_change(summary: pd.DataFrame, label: str) -> plt.Figure:
     return fig
 
 
-def mcf_pos_neg_asymmetry(summary: pd.DataFrame, label: str) -> plt.Figure:
+def mcf_pos_neg_asymmetry(summary, label):
     if "accuracy" not in summary.columns:
         return None
     pos = summary[summary["coef"] > 0].groupby("layer")["accuracy"].max()
@@ -310,8 +367,7 @@ def mcf_pos_neg_asymmetry(summary: pd.DataFrame, label: str) -> plt.Figure:
     return fig
 
 
-def mcf_accuracy_lines(summary: pd.DataFrame, label: str,
-                        highlight_layers: Optional[List[int]] = None) -> plt.Figure:
+def mcf_accuracy_lines(summary, label, highlight_layers=None):
     if "accuracy" not in summary.columns:
         return None
     layers = sorted(summary["layer"].unique())
@@ -349,7 +405,7 @@ def mcf_accuracy_lines(summary: pd.DataFrame, label: str,
 # MCF — Per-layer plots
 # =============================================================================
 
-def mcf_delta_distribution(results: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def mcf_delta_distribution(results, label, layer):
     col = "delta_correct_logprob"
     if col not in results.columns:
         return None
@@ -376,7 +432,7 @@ def mcf_delta_distribution(results: pd.DataFrame, label: str, layer: int) -> plt
     return fig
 
 
-def mcf_rank_change_distribution(results: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def mcf_rank_change_distribution(results, label, layer):
     col = "rank_change"
     if col not in results.columns:
         return None
@@ -403,8 +459,7 @@ def mcf_rank_change_distribution(results: pd.DataFrame, label: str, layer: int) 
     return fig
 
 
-def mcf_per_question_heatmap(results: pd.DataFrame, label: str, layer: int,
-                              max_questions: int = 60) -> plt.Figure:
+def mcf_per_question_heatmap(results, label, layer, max_questions=60):
     col = "delta_correct_logprob"
     if col not in results.columns:
         return None
@@ -435,7 +490,7 @@ def mcf_per_question_heatmap(results: pd.DataFrame, label: str, layer: int,
     return fig
 
 
-def mcf_improved_hurt_bar(summary: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def mcf_improved_hurt_bar(summary, label, layer):
     if "pct_improved_logprob" not in summary.columns:
         return None
     sub = summary[(summary["layer"] == layer) & (summary["coef"] != 0.0)].sort_values("coef")
@@ -466,10 +521,8 @@ def mcf_improved_hurt_bar(summary: pd.DataFrame, label: str, layer: int) -> plt.
 # CF — Cross-layer plots
 # =============================================================================
 
-def cf_accuracy_heatmap(summary: pd.DataFrame, label: str,
-                         scoring: str = "sum") -> plt.Figure:
-    col = f"accuracy_{scoring}"
-    pv = _pivot(summary, col)
+def cf_accuracy_heatmap(summary, label, scoring="sum"):
+    pv = _pivot(summary, f"accuracy_{scoring}")
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
@@ -479,35 +532,30 @@ def cf_accuracy_heatmap(summary: pd.DataFrame, label: str,
     return fig
 
 
-def cf_delta_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def cf_delta_heatmap(summary, label):
     pv = _pivot(summary, "mean_delta_target_sum_lp", steered_only=True)
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
-    _heatmap(ax, pv, "RdBu", symmetric=True,
-             cbar_label="Mean Δ target sum log-prob")
+    _heatmap(ax, pv, "RdBu", symmetric=True, cbar_label="Mean Δ target sum log-prob")
     ax.set_title(f"{label} | CF: Mean Δ Target Sum Log-Prob  (blue=improved)")
     plt.tight_layout()
     return fig
 
 
-def cf_pct_improved_heatmap(summary: pd.DataFrame, label: str,
-                              scoring: str = "sum") -> plt.Figure:
-    col = f"pct_improved_{scoring}"
-    pv = _pivot(summary, col, steered_only=True)
+def cf_pct_improved_heatmap(summary, label, scoring="sum"):
+    pv = _pivot(summary, f"pct_improved_{scoring}", steered_only=True)
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
     _heatmap(ax, pv, "YlGn", vmin=0, vmax=1, cbar_label="Fraction improved")
-    ax.set_title(f"{label} | CF: % Questions with Improved Target Log-Prob ({scoring})")
+    ax.set_title(f"{label} | CF: % Improved ({scoring})")
     plt.tight_layout()
     return fig
 
 
-def cf_rank_heatmap(summary: pd.DataFrame, label: str,
-                     scoring: str = "sum") -> plt.Figure:
-    col = f"mean_target_rank_{scoring}"
-    pv = _pivot(summary, col)
+def cf_rank_heatmap(summary, label, scoring="sum"):
+    pv = _pivot(summary, f"mean_target_rank_{scoring}")
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
@@ -517,20 +565,18 @@ def cf_rank_heatmap(summary: pd.DataFrame, label: str,
     return fig
 
 
-def cf_margin_heatmap(summary: pd.DataFrame, label: str) -> plt.Figure:
+def cf_margin_heatmap(summary, label):
     pv = _pivot(summary, "mean_margin_sum")
     if pv is None:
         return None
     fig, ax = plt.subplots(figsize=(13, 7))
-    _heatmap(ax, pv, "RdBu", symmetric=True,
-             cbar_label="Mean margin (target − best wrong)")
-    ax.set_title(f"{label} | CF: Mean Margin — sum scoring  (blue=target leads)")
+    _heatmap(ax, pv, "RdBu", symmetric=True, cbar_label="Mean margin")
+    ax.set_title(f"{label} | CF: Mean Margin (sum)  (blue=target leads)")
     plt.tight_layout()
     return fig
 
 
-def cf_best_coef_per_layer(summary: pd.DataFrame, label: str,
-                             scoring: str = "sum") -> plt.Figure:
+def cf_best_coef_per_layer(summary, label, scoring="sum"):
     col = f"accuracy_{scoring}"
     if col not in summary.columns:
         return None
@@ -542,8 +588,7 @@ def cf_best_coef_per_layer(summary: pd.DataFrame, label: str,
     colors = ["#2ecc71" if best.iloc[i][col] > baseline.get(best.iloc[i]["layer"], 0)
               else "#e74c3c" for i in range(len(best))]
     axes[0].bar(best["layer"], best[col], color=colors, alpha=0.85)
-    axes[0].plot(best["layer"],
-                 [baseline.get(l, np.nan) for l in best["layer"]],
+    axes[0].plot(best["layer"], [baseline.get(l, np.nan) for l in best["layer"]],
                  "k--", alpha=0.6, label="Baseline")
     axes[0].axhline(0.25, ls=":", color="gray", alpha=0.4, label="Random (25%)")
     axes[0].set_ylabel(f"Best Accuracy ({scoring})")
@@ -559,15 +604,14 @@ def cf_best_coef_per_layer(summary: pd.DataFrame, label: str,
     return fig
 
 
-def cf_multi_scoring_comparison(summary: pd.DataFrame, label: str) -> plt.Figure:
+def cf_multi_scoring_comparison(summary, label):
     scorings = [s for s in ["sum", "mean", "char", "pmi"]
                 if f"accuracy_{s}" in summary.columns]
     if not scorings:
         return None
     steered = summary[summary["coef"] != 0.0]
     layers = sorted(summary["layer"].unique())
-    best_per = {sc: steered.groupby("layer")[f"accuracy_{sc}"].max()
-                for sc in scorings}
+    best_per = {sc: steered.groupby("layer")[f"accuracy_{sc}"].max() for sc in scorings}
 
     x = np.arange(len(layers))
     w = 0.8 / len(scorings)
@@ -577,7 +621,7 @@ def cf_multi_scoring_comparison(summary: pd.DataFrame, label: str) -> plt.Figure
     for i, sc in enumerate(scorings):
         vals = [best_per[sc].get(l, np.nan) for l in layers]
         ax.bar(x + i * w - (len(scorings) - 1) * w / 2, vals, w,
-               label=f"{sc}", color=colors[i % len(colors)], alpha=0.8)
+               label=sc, color=colors[i % len(colors)], alpha=0.8)
     ax.axhline(0.25, ls=":", color="gray", alpha=0.4, label="Random (25%)")
     ax.set_xticks(x)
     ax.set_xticklabels(layers)
@@ -590,9 +634,7 @@ def cf_multi_scoring_comparison(summary: pd.DataFrame, label: str) -> plt.Figure
     return fig
 
 
-def cf_accuracy_lines(summary: pd.DataFrame, label: str,
-                       scoring: str = "sum",
-                       highlight_layers: Optional[List[int]] = None) -> plt.Figure:
+def cf_accuracy_lines(summary, label, scoring="sum", highlight_layers=None):
     col = f"accuracy_{scoring}"
     if col not in summary.columns:
         return None
@@ -627,7 +669,7 @@ def cf_accuracy_lines(summary: pd.DataFrame, label: str,
     return fig
 
 
-def cf_delta_max_per_layer(summary: pd.DataFrame, label: str) -> plt.Figure:
+def cf_delta_max_per_layer(summary, label):
     col = "mean_delta_target_sum_lp"
     if col not in summary.columns:
         return None
@@ -653,10 +695,10 @@ def cf_delta_max_per_layer(summary: pd.DataFrame, label: str) -> plt.Figure:
 
 
 # =============================================================================
-# CF — Per-layer plots (using detailed_wide)
+# CF — Per-layer plots
 # =============================================================================
 
-def cf_delta_distribution(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def cf_delta_distribution(cf_wide, label, layer):
     col = "delta_target_sum_lp"
     if col not in cf_wide.columns:
         return None
@@ -683,8 +725,7 @@ def cf_delta_distribution(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.
     return fig
 
 
-def cf_per_question_heatmap(cf_wide: pd.DataFrame, label: str, layer: int,
-                             max_questions: int = 60) -> plt.Figure:
+def cf_per_question_heatmap(cf_wide, label, layer, max_questions=60):
     col = "delta_target_sum_lp"
     if col not in cf_wide.columns:
         return None
@@ -715,7 +756,7 @@ def cf_per_question_heatmap(cf_wide: pd.DataFrame, label: str, layer: int,
     return fig
 
 
-def cf_improved_hurt_bar(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def cf_improved_hurt_bar(cf_wide, label, layer):
     col = "delta_target_sum_lp"
     if col not in cf_wide.columns:
         return None
@@ -723,8 +764,8 @@ def cf_improved_hurt_bar(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.F
     if sub.empty:
         return None
     coefs = sorted(sub["coef"].unique())
-    improved = [float((sub[sub["coef"] == c][col] > 0).mean()) for c in coefs]
-    hurt     = [float((sub[sub["coef"] == c][col] < 0).mean()) for c in coefs]
+    improved  = [(sub[sub["coef"] == c][col] > 0).mean() for c in coefs]
+    hurt      = [(sub[sub["coef"] == c][col] < 0).mean() for c in coefs]
     unchanged = [max(0.0, 1.0 - i - h) for i, h in zip(improved, hurt)]
 
     labels = [f"{c:.1f}" for c in coefs]
@@ -746,7 +787,7 @@ def cf_improved_hurt_bar(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.F
     return fig
 
 
-def cf_target_rank_stacked_bar(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def cf_target_rank_stacked_bar(cf_wide, label, layer):
     col = "target_rank_sum"
     if col not in cf_wide.columns:
         return None
@@ -774,7 +815,7 @@ def cf_target_rank_stacked_bar(cf_wide: pd.DataFrame, label: str, layer: int) ->
     return fig
 
 
-def cf_margin_distribution(cf_wide: pd.DataFrame, label: str, layer: int) -> plt.Figure:
+def cf_margin_distribution(cf_wide, label, layer):
     col = "delta_margin_sum"
     if col not in cf_wide.columns:
         return None
@@ -805,10 +846,7 @@ def cf_margin_distribution(cf_wide: pd.DataFrame, label: str, layer: int) -> plt
 # Joint MCF + CF plots
 # =============================================================================
 
-def joint_best_layer_comparison(mcf_summary: pd.DataFrame,
-                                  cf_summary: pd.DataFrame,
-                                  label: str,
-                                  cf_scoring: str = "sum") -> plt.Figure:
+def joint_best_layer_comparison(mcf_summary, cf_summary, label, cf_scoring="sum"):
     cf_col = f"accuracy_{cf_scoring}"
     if cf_col not in cf_summary.columns:
         return None
@@ -842,10 +880,7 @@ def joint_best_layer_comparison(mcf_summary: pd.DataFrame,
     return fig
 
 
-def joint_improvement_scatter(mcf_summary: pd.DataFrame,
-                               cf_summary: pd.DataFrame,
-                               label: str,
-                               cf_scoring: str = "sum") -> plt.Figure:
+def joint_improvement_scatter(mcf_summary, cf_summary, label, cf_scoring="sum"):
     cf_col = f"accuracy_{cf_scoring}"
     if cf_col not in cf_summary.columns:
         return None
@@ -863,8 +898,7 @@ def joint_improvement_scatter(mcf_summary: pd.DataFrame,
                     edgecolors="black", linewidths=0.5, zorder=3)
     plt.colorbar(sc, ax=ax, label="Layer")
     for i, layer in enumerate(layers):
-        ax.annotate(f"L{layer}", (mcf_imp[i], cf_imp[i]),
-                    fontsize=7, alpha=0.8,
+        ax.annotate(f"L{layer}", (mcf_imp[i], cf_imp[i]), fontsize=7, alpha=0.8,
                     textcoords="offset points", xytext=(4, 4))
     finite_vals = [v for v in mcf_imp + cf_imp if np.isfinite(v)]
     if finite_vals:
@@ -882,18 +916,16 @@ def joint_improvement_scatter(mcf_summary: pd.DataFrame,
     return fig
 
 
-def joint_best_coef_alignment(mcf_summary: pd.DataFrame,
-                               cf_summary: pd.DataFrame,
-                               label: str,
-                               cf_scoring: str = "sum") -> plt.Figure:
-    """Scatter: best coef selected by MCF vs best coef by CF per layer."""
+def joint_best_coef_alignment(mcf_summary, cf_summary, label, cf_scoring="sum"):
     cf_col = f"accuracy_{cf_scoring}"
     if cf_col not in cf_summary.columns:
         return None
-    mcf_steered = mcf_summary[mcf_summary["coef"] != 0.0]
-    cf_steered  = cf_summary[cf_summary["coef"] != 0.0]
-    mcf_best_coef = mcf_steered.loc[mcf_steered.groupby("layer")["accuracy"].idxmax()].set_index("layer")["coef"]
-    cf_best_coef  = cf_steered.loc[cf_steered.groupby("layer")[cf_col].idxmax()].set_index("layer")["coef"]
+    mcf_best_coef = mcf_summary[mcf_summary["coef"] != 0.0].loc[
+        mcf_summary[mcf_summary["coef"] != 0.0].groupby("layer")["accuracy"].idxmax()
+    ].set_index("layer")["coef"]
+    cf_best_coef = cf_summary[cf_summary["coef"] != 0.0].loc[
+        cf_summary[cf_summary["coef"] != 0.0].groupby("layer")[cf_col].idxmax()
+    ].set_index("layer")["coef"]
 
     layers = sorted(set(mcf_best_coef.index) & set(cf_best_coef.index))
     if not layers:
@@ -906,8 +938,7 @@ def joint_best_coef_alignment(mcf_summary: pd.DataFrame,
                     edgecolors="black", linewidths=0.5, zorder=3)
     plt.colorbar(sc, ax=ax, label="Layer")
     for i, layer in enumerate(layers):
-        ax.annotate(f"L{layer}", (mcf_vals[i], cf_vals[i]),
-                    fontsize=7, alpha=0.8,
+        ax.annotate(f"L{layer}", (mcf_vals[i], cf_vals[i]), fontsize=7, alpha=0.8,
                     textcoords="offset points", xytext=(4, 4))
     finite_vals = [v for v in mcf_vals + cf_vals if np.isfinite(v)]
     if finite_vals:
@@ -929,11 +960,9 @@ def joint_best_coef_alignment(mcf_summary: pd.DataFrame,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate all visualizations for one experiment result directory."
+        description="Show all visualizations for one experiment result directory."
     )
     parser.add_argument("base_dir", help="Path to experiment output directory")
-    parser.add_argument("--out-dir", default=None,
-                        help="Where to save plots (default: <base_dir>/plots)")
     parser.add_argument("--top-layers", type=int, default=5,
                         help="Number of top layers for highlighted line plots (default: 5)")
     parser.add_argument("--best-layer", type=int, default=None,
@@ -960,161 +989,102 @@ def main():
     cf_wide     = data["cf_wide"]
 
     if mcf_summary is None and cf_summary is None:
-        print("No usable data found (missing mcf/ and cf/ subdirectories).", file=sys.stderr)
+        print("No usable data found.", file=sys.stderr)
         sys.exit(1)
 
-    exp_dir = data["exp_dir"]
-    out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "plots"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nSaving plots to: {out_dir}\n")
+    figs = []
 
-    saved: list[str] = []
-    counter = [0]
+    def show(fig):
+        if fig is not None:
+            figs.append(fig)
 
-    def save(fig, name: str):
-        if fig is None:
-            return
-        counter[0] += 1
-        fname = f"{counter[0]:02d}_{name}.png"
-        _save(fig, out_dir, fname)
-        saved.append(fname)
-        print(f"  [{counter[0]:02d}] {fname}")
+    # ------------------------------------------------------------------
+    # Numerical tables
+    # ------------------------------------------------------------------
+    if mcf_summary is not None:
+        print_mcf_numbers(mcf_summary, label)
+
+    if cf_summary is not None:
+        print_cf_numbers(cf_summary, label)
 
     # ------------------------------------------------------------------
     # MCF cross-layer
     # ------------------------------------------------------------------
     if mcf_summary is not None:
-        print(f"\n--- MCF cross-layer ---")
         mcf_top = _best_layers(mcf_summary, "accuracy", args.top_layers)
-        best_mcf_layer = (args.best_layer if args.best_layer is not None
-                          else (mcf_top[0] if mcf_top else 0))
+        best_mcf_layer = args.best_layer if args.best_layer is not None \
+            else (mcf_top[0] if mcf_top else 0)
 
-        save(mcf_accuracy_heatmap(mcf_summary, label),
-             "MCF_accuracy_heatmap")
-        save(mcf_delta_logprob_heatmap(mcf_summary, label),
-             "MCF_delta_logprob_heatmap")
-        save(mcf_pct_improved_heatmap(mcf_summary, label),
-             "MCF_pct_improved_heatmap")
-        save(mcf_pct_hurt_heatmap(mcf_summary, label),
-             "MCF_pct_hurt_heatmap")
-        save(mcf_rank_heatmap(mcf_summary, label),
-             "MCF_rank_heatmap")
-        save(mcf_best_coef_per_layer(mcf_summary, label),
-             "MCF_best_coef_per_layer")
-        save(mcf_max_accuracy_change(mcf_summary, label),
-             "MCF_max_accuracy_change")
-        save(mcf_pos_neg_asymmetry(mcf_summary, label),
-             "MCF_pos_neg_asymmetry")
-        save(mcf_accuracy_lines(mcf_summary, label, highlight_layers=mcf_top),
-             "MCF_accuracy_lines_top_layers")
-        save(mcf_accuracy_lines(mcf_summary, label, highlight_layers=None),
-             "MCF_accuracy_lines_all")
+        show(mcf_accuracy_heatmap(mcf_summary, label))
+        show(mcf_delta_logprob_heatmap(mcf_summary, label))
+        show(mcf_pct_improved_heatmap(mcf_summary, label))
+        show(mcf_pct_hurt_heatmap(mcf_summary, label))
+        show(mcf_rank_heatmap(mcf_summary, label))
+        show(mcf_best_coef_per_layer(mcf_summary, label))
+        show(mcf_max_accuracy_change(mcf_summary, label))
+        show(mcf_pos_neg_asymmetry(mcf_summary, label))
+        show(mcf_accuracy_lines(mcf_summary, label, highlight_layers=mcf_top))
+        show(mcf_accuracy_lines(mcf_summary, label, highlight_layers=None))
 
         # MCF per-layer
-        print(f"\n--- MCF per-layer (layer {best_mcf_layer}) ---")
         if mcf_results is not None:
-            save(mcf_delta_distribution(mcf_results, label, best_mcf_layer),
-                 f"MCF_L{best_mcf_layer}_delta_distribution")
-            save(mcf_rank_change_distribution(mcf_results, label, best_mcf_layer),
-                 f"MCF_L{best_mcf_layer}_rank_change_distribution")
-            save(mcf_per_question_heatmap(mcf_results, label, best_mcf_layer),
-                 f"MCF_L{best_mcf_layer}_per_question_heatmap")
-        save(mcf_improved_hurt_bar(mcf_summary, label, best_mcf_layer),
-             f"MCF_L{best_mcf_layer}_improved_hurt")
+            show(mcf_delta_distribution(mcf_results, label, best_mcf_layer))
+            show(mcf_rank_change_distribution(mcf_results, label, best_mcf_layer))
+            show(mcf_per_question_heatmap(mcf_results, label, best_mcf_layer))
+        show(mcf_improved_hurt_bar(mcf_summary, label, best_mcf_layer))
 
-        # Second and third best layers
         for layer in mcf_top[1:3]:
-            save(mcf_improved_hurt_bar(mcf_summary, label, layer),
-                 f"MCF_L{layer}_improved_hurt")
+            show(mcf_improved_hurt_bar(mcf_summary, label, layer))
             if mcf_results is not None:
-                save(mcf_delta_distribution(mcf_results, label, layer),
-                     f"MCF_L{layer}_delta_distribution")
+                show(mcf_delta_distribution(mcf_results, label, layer))
 
     # ------------------------------------------------------------------
     # CF cross-layer
     # ------------------------------------------------------------------
     if cf_summary is not None:
-        print(f"\n--- CF cross-layer ---")
         cf_top = _best_layers(cf_summary, "accuracy_sum", args.top_layers)
-        best_cf_layer = (args.best_layer if args.best_layer is not None
-                         else (cf_top[0] if cf_top else 0))
+        best_cf_layer = args.best_layer if args.best_layer is not None \
+            else (cf_top[0] if cf_top else 0)
 
         for scoring in ["sum", "char", "mean"]:
-            save(cf_accuracy_heatmap(cf_summary, label, scoring=scoring),
-                 f"CF_{scoring}_accuracy_heatmap")
+            show(cf_accuracy_heatmap(cf_summary, label, scoring=scoring))
 
-        save(cf_delta_heatmap(cf_summary, label),
-             "CF_delta_sum_logprob_heatmap")
-        save(cf_pct_improved_heatmap(cf_summary, label, scoring="sum"),
-             "CF_pct_improved_heatmap_sum")
-        save(cf_pct_improved_heatmap(cf_summary, label, scoring="char"),
-             "CF_pct_improved_heatmap_char")
-        save(cf_rank_heatmap(cf_summary, label, scoring="sum"),
-             "CF_rank_heatmap_sum")
-        save(cf_margin_heatmap(cf_summary, label),
-             "CF_margin_heatmap")
-        save(cf_best_coef_per_layer(cf_summary, label, scoring="sum"),
-             "CF_best_coef_per_layer_sum")
-        save(cf_best_coef_per_layer(cf_summary, label, scoring="char"),
-             "CF_best_coef_per_layer_char")
-        save(cf_multi_scoring_comparison(cf_summary, label),
-             "CF_multi_scoring_comparison")
-        save(cf_delta_max_per_layer(cf_summary, label),
-             "CF_delta_max_per_layer")
-        save(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=cf_top),
-             "CF_accuracy_lines_sum_top_layers")
-        save(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=None),
-             "CF_accuracy_lines_sum_all")
+        show(cf_delta_heatmap(cf_summary, label))
+        show(cf_pct_improved_heatmap(cf_summary, label, scoring="sum"))
+        show(cf_pct_improved_heatmap(cf_summary, label, scoring="char"))
+        show(cf_rank_heatmap(cf_summary, label, scoring="sum"))
+        show(cf_margin_heatmap(cf_summary, label))
+        show(cf_best_coef_per_layer(cf_summary, label, scoring="sum"))
+        show(cf_best_coef_per_layer(cf_summary, label, scoring="char"))
+        show(cf_multi_scoring_comparison(cf_summary, label))
+        show(cf_delta_max_per_layer(cf_summary, label))
+        show(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=cf_top))
+        show(cf_accuracy_lines(cf_summary, label, scoring="sum", highlight_layers=None))
 
-        # CF per-layer
         if cf_wide is not None:
-            print(f"\n--- CF per-layer (layer {best_cf_layer}) ---")
-            save(cf_delta_distribution(cf_wide, label, best_cf_layer),
-                 f"CF_L{best_cf_layer}_delta_distribution")
-            save(cf_per_question_heatmap(cf_wide, label, best_cf_layer),
-                 f"CF_L{best_cf_layer}_per_question_heatmap")
-            save(cf_improved_hurt_bar(cf_wide, label, best_cf_layer),
-                 f"CF_L{best_cf_layer}_improved_hurt")
-            save(cf_target_rank_stacked_bar(cf_wide, label, best_cf_layer),
-                 f"CF_L{best_cf_layer}_target_rank_stacked")
-            save(cf_margin_distribution(cf_wide, label, best_cf_layer),
-                 f"CF_L{best_cf_layer}_margin_distribution")
+            show(cf_delta_distribution(cf_wide, label, best_cf_layer))
+            show(cf_per_question_heatmap(cf_wide, label, best_cf_layer))
+            show(cf_improved_hurt_bar(cf_wide, label, best_cf_layer))
+            show(cf_target_rank_stacked_bar(cf_wide, label, best_cf_layer))
+            show(cf_margin_distribution(cf_wide, label, best_cf_layer))
 
             for layer in cf_top[1:3]:
-                save(cf_improved_hurt_bar(cf_wide, label, layer),
-                     f"CF_L{layer}_improved_hurt")
-                save(cf_delta_distribution(cf_wide, label, layer),
-                     f"CF_L{layer}_delta_distribution")
+                show(cf_improved_hurt_bar(cf_wide, label, layer))
+                show(cf_delta_distribution(cf_wide, label, layer))
 
     # ------------------------------------------------------------------
     # Joint MCF + CF
     # ------------------------------------------------------------------
     if mcf_summary is not None and cf_summary is not None:
-        print(f"\n--- Joint MCF + CF ---")
-        save(joint_best_layer_comparison(mcf_summary, cf_summary, label,
-                                          cf_scoring=args.cf_scoring),
-             f"JOINT_best_layer_MCF_vs_CF")
-        save(joint_improvement_scatter(mcf_summary, cf_summary, label,
-                                        cf_scoring=args.cf_scoring),
-             f"JOINT_improvement_scatter")
-        save(joint_best_coef_alignment(mcf_summary, cf_summary, label,
-                                        cf_scoring=args.cf_scoring),
-             f"JOINT_best_coef_alignment")
+        show(joint_best_layer_comparison(mcf_summary, cf_summary, label,
+                                          cf_scoring=args.cf_scoring))
+        show(joint_improvement_scatter(mcf_summary, cf_summary, label,
+                                        cf_scoring=args.cf_scoring))
+        show(joint_best_coef_alignment(mcf_summary, cf_summary, label,
+                                        cf_scoring=args.cf_scoring))
 
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
-    print(f"\n{'='*60}")
-    print(f"Generated {len(saved)} plots → {out_dir}")
-    print(f"{'='*60}")
-
-    manifest_path = out_dir / "manifest.txt"
-    with open(manifest_path, "w") as f:
-        f.write(f"Experiment : {label}\n")
-        f.write(f"Plots      : {len(saved)}\n\n")
-        for fname in saved:
-            f.write(f"  {fname}\n")
-    print(f"Manifest → {manifest_path}")
+    print(f"\nShowing {len(figs)} plots...")
+    plt.show()
 
 
 if __name__ == "__main__":
