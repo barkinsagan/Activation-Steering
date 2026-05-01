@@ -58,7 +58,7 @@ def run_experiment(cfg: ExperimentConfig):
         neg_df       = pd.read_csv(cfg.dataset.neg_capture_path)
         capture_n    = cfg.dataset.capture_n
 
-        # Few-shots: first num_shots rows of the MMLU general CSV
+        # Few-shots: first num_shots rows of the MMLU general CSV (eval only, not capture)
         fewshot_examples = df_to_fewshot_examples(neg_df, s.num_shots)
         formatter = build_formatter(
             task_prefix=s.task_prefix,
@@ -66,6 +66,13 @@ def run_experiment(cfg: ExperimentConfig):
             shuffle_choices=s.shuffle_choices,
             seed=42,
             fewshot_examples=fewshot_examples,
+        )
+        # Zero-shot formatter for DIM capture — no shared context between pos and neg
+        capture_formatter = build_formatter(
+            task_prefix=s.task_prefix,
+            num_shots=0,
+            shuffle_choices=s.shuffle_choices,
+            seed=42,
         )
 
         # Pos capture: first capture_n rows of eval CSV
@@ -76,10 +83,10 @@ def run_experiment(cfg: ExperimentConfig):
         eval_df   = full_eval_df.iloc[capture_n:].reset_index(drop=True)
         false_cols = [c for c in ["false1", "false2", "false3"] if c in full_eval_df.columns]
 
-        pos_prompts_mcf = build_capture_prompts_mcf(pos_df, formatter, capture_n)
-        neg_prompts_mcf = build_capture_prompts_mcf(neg_capture_df, formatter, len(neg_capture_df))
-        pos_prompts_cf  = build_capture_prompts_cf(pos_df, formatter, capture_n)
-        neg_prompts_cf  = build_capture_prompts_cf(neg_capture_df, formatter, len(neg_capture_df))
+        pos_prompts_mcf = build_capture_prompts_mcf(pos_df, capture_formatter, capture_n)
+        neg_prompts_mcf = build_capture_prompts_mcf(neg_capture_df, capture_formatter, len(neg_capture_df))
+        pos_prompts_cf  = build_capture_prompts_cf(pos_df, capture_formatter, capture_n)
+        neg_prompts_cf  = build_capture_prompts_cf(neg_capture_df, capture_formatter, len(neg_capture_df))
     else:
         eval_df, false_cols = load_eval_dataset(cfg)
         pos_prompts, neg_prompts = load_steering_prompts(cfg)

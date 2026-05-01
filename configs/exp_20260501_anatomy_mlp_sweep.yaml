@@ -27,4 +27,4 @@ sweep:
   resume: true
 
 output:
-  base_dir: results/
+  base_dir: results/anatomy_mlp/
