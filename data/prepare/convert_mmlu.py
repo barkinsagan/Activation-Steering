@@ -10,14 +10,13 @@ Outputs per subject:
 
 Usage:
   # Non-medical subjects for DIM neg prompts
-  python data/prepare/convert_mmlu.py --subjects world_history high_school_geography
+  python data/prepare/convert_mmlu.py --subjects high_school_world_history high_school_geography
 
-  # All non-medical subjects combined into one file
-  python data/prepare/convert_mmlu.py --subjects world_history high_school_geography \
-      european_history human_geography prehistory --merge --out data/eval/mmlu_nonmed_sweep.csv
+  # All non-medical subjects combined into one file (default subjects list)
+  python data/prepare/convert_mmlu.py --merge --out data/eval/mmlu_nonmed_sweep.csv
 
   # Custom size
-  python data/prepare/convert_mmlu.py --subjects world_history --sweep_n 200
+  python data/prepare/convert_mmlu.py --subjects high_school_world_history --sweep_n 200
 """
 
 import argparse
@@ -38,16 +37,16 @@ from data.prepare.base_converter import (
 
 # Recommended non-medical subjects for use as neg contrast class
 NON_MEDICAL_SUBJECTS = [
-    "world_history",
+    "high_school_world_history",
     "high_school_geography",
-    "european_history",
+    "high_school_european_history",
     "human_geography",
     "prehistory",
     "world_religions",
-    "high_school_world_history",
     "sociology",
     "philosophy",
     "jurisprudence",
+    "international_law",
 ]
 
 
