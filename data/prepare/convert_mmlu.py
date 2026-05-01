@@ -35,19 +35,8 @@ from data.prepare.base_converter import (
     STANDARD_COLUMNS_MCQ,
 )
 
-# Recommended non-medical subjects for use as neg contrast class
-NON_MEDICAL_SUBJECTS = [
-    "high_school_world_history",
-    "high_school_geography",
-    "high_school_european_history",
-    "human_geography",
-    "prehistory",
-    "world_religions",
-    "sociology",
-    "philosophy",
-    "jurisprudence",
-    "international_law",
-]
+# Use the combined "all" config — loads every MMLU subject at once
+NON_MEDICAL_SUBJECTS = ["all"]
 
 
 def load_mmlu(subject: str, split: str = "test"):
