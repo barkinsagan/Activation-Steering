@@ -6,7 +6,7 @@ model:
   device: cuda
 
 dataset:
-  eval_path: data/eval/anatomy_sweep_150.csv
+  eval_path: data/eval/anatomy_sweep.csv
   neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
   capture_n: 100
 
