@@ -1,0 +1,35 @@
+experiment_id: _base_do_not_run
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/anatomy_sweep.csv
+  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
+  capture_n: 100
+
+sweep:
+  formulation: both
+  layers: [8, 16, 24]
+  coef_range:
+    - [-3,  -1, 1]             # -3, -2, -1
+    - [-1,   1, 0.25]          # -1, -0.75, ..., 0, ..., 0.75, 1
+    - [1,    3, 1]             # 1, 2, 3
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+  task_prefix: question
+  cf_normalization: character
+  num_shots: 5
+  fewshot_source: data/fewshots/anatomy_fewshot.yaml
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+  generate_examples: false
+
+output:
+  base_dir: results/

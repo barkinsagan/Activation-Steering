@@ -44,6 +44,7 @@ def run_experiment(cfg: ExperimentConfig):
     config_snapshot = out_dir / "config.yaml"
     # Re-read original config path from argv (best effort) or reconstruct
     _save_config_snapshot(cfg, config_snapshot)
+    _save_experiment_details(cfg, out_dir / "experiment_details.txt")
 
     # --- Load model ---
     model, tokenizer = load_model(cfg)
@@ -548,6 +549,56 @@ def _save_continuation_summary(df: pd.DataFrame, path):
 # Config snapshot
 # =============================================================================
 
+def _save_experiment_details(cfg: ExperimentConfig, path: Path):
+    """Write a human-readable summary of the experiment setup to a txt file."""
+    from datetime import datetime
+    s = cfg.sweep
+    dataset_capture = bool(cfg.dataset.neg_capture_path)
+    lines = [
+        f"EXPERIMENT: {cfg.experiment_id}",
+        f"Date      : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "MODEL",
+        f"  name    : {cfg.model.name}",
+        f"  dtype   : {cfg.model.dtype}   device: {cfg.model.device}",
+        "",
+        "STEERING TARGET",
+        f"  pattern : {s.layer_pattern}",
+        f"  sublayer: {s.sublayer or '(full block output)'}",
+        f"  layers  : {s.layers or 'all'}",
+        f"  token_position : {s.token_position}",
+        f"  normalize      : {s.normalize_vector}  norm_type: {s.norm_type}",
+        "",
+        "SWEEP",
+        f"  formulation    : {s.formulation}",
+        f"  coefs          : {s.coef_list}",
+        f"  cf_normalization: {s.cf_normalization}",
+        "",
+        "DATASET",
+        f"  eval_path      : {cfg.dataset.eval_path}",
+        f"  capture_mode   : {'dataset (MCF-formatted)' if dataset_capture else 'text-file (plain sentences)'}",
+    ]
+    if dataset_capture:
+        lines += [
+            f"  pos_capture    : {cfg.dataset.eval_path}  rows 0–{cfg.dataset.capture_n - 1}",
+            f"  neg_capture    : {cfg.dataset.neg_capture_path}  rows {s.num_shots}–{s.num_shots + cfg.dataset.capture_n - 1}",
+        ]
+    else:
+        lines += [
+            f"  pos_prompts    : {cfg.dataset.positive_prompts_path}",
+            f"  neg_prompts    : {cfg.dataset.negative_prompts_path}",
+        ]
+    lines += [
+        f"  few_shots      : {s.num_shots}  source: {s.fewshot_source or 'none'}",
+        f"  shuffle_choices: {s.shuffle_choices}",
+        "",
+        "OUTPUT",
+        f"  base_dir: {cfg.output.base_dir}",
+        f"  out_dir : {cfg.output_dir}",
+    ]
+    path.write_text("\n".join(lines) + "\n")
+
+
 def _save_config_snapshot(cfg: ExperimentConfig, path: Path):
     """Save a YAML snapshot of the config used for this run."""
     import dataclasses
@@ -602,6 +653,14 @@ def main():
         default=None,
         help="Override output.base_dir (e.g. /content/drive/MyDrive/steering_results)",
     )
+    parser.add_argument(
+        "--examples", dest="generate_examples", action="store_true", default=None,
+        help="Override: enable qualitative example generation",
+    )
+    parser.add_argument(
+        "--no-examples", dest="generate_examples", action="store_false",
+        help="Override: disable qualitative example generation",
+    )
     args = parser.parse_args()
 
     configs = []
@@ -627,6 +686,8 @@ def main():
             cfg.sweep.layers = layers_override
         if args.base_dir is not None:
             cfg.output.base_dir = args.base_dir
+        if args.generate_examples is not None:
+            cfg.sweep.generate_examples = args.generate_examples
         run_experiment(cfg)
 
 

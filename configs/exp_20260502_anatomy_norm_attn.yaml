@@ -1,0 +1,7 @@
+base: configs/exp_20260502_anatomy_sublayer_base.yaml
+experiment_id: exp_20260502_anatomy_norm_attn
+
+sweep:
+  # Attention output projection — pre residual addition
+  layer_name_pattern: "model.layers.{layer_idx}"
+  sublayer: self_attn.o_proj

@@ -108,7 +108,7 @@ def _exp_label(data: dict) -> str:
 # Numerical summaries
 # =============================================================================
 
-def print_mcf_numbers(summary: pd.DataFrame, label: str):
+def print_mcf_numbers(summary: pd.DataFrame, label: str, results: pd.DataFrame = None):
     cols_exist = [c for c in [
         "coef", "accuracy",
         "mean_correct_label_logprob", "mean_delta_correct_logprob",
@@ -139,6 +139,37 @@ def print_mcf_numbers(summary: pd.DataFrame, label: str):
     best["baseline_acc"] = best["layer"].map(base_acc)
     best["delta_acc"] = best["accuracy"] - best["baseline_acc"]
     print(best.to_string(index=False))
+
+    # Asymmetry table: compare +c vs -c at the same magnitude
+    if results is not None and "delta_correct_logprob" in results.columns:
+        print(f"\n{'─'*W}")
+        print("  ASYMMETRY TABLE  (|Δ(+c) + Δ(-c)| near 0 → symmetric hurt)")
+        print(f"{'─'*W}")
+        print(f"  {'layer':>5} {'|coef|':>7} {'Δ(+c)':>10} {'Δ(-c)':>10} "
+              f"{'Δ++Δ-':>10} {'pct+(+c)':>10} {'pct+(-c)':>10}")
+        print(f"  {'-'*W}")
+        nz = results[results["coef"] != 0.0].copy()
+        nz["abs_coef"] = nz["coef"].abs()
+        nz["sign"] = nz["coef"].apply(lambda c: "pos" if c > 0 else "neg")
+        per_lc = nz.groupby(["layer", "abs_coef", "sign"]).agg(
+            mean_delta=("delta_correct_logprob", "mean"),
+            pct_improved=("delta_correct_logprob", lambda s: (s > 0).mean()),
+        ).reset_index()
+        wide = per_lc.pivot_table(
+            index=["layer", "abs_coef"], columns="sign",
+            values=["mean_delta", "pct_improved"],
+        ).reset_index()
+        for _, r in wide.iterrows():
+            layer = int(r[("layer", "")])
+            ac = float(r[("abs_coef", "")])
+            d_pos = r[("mean_delta", "pos")]
+            d_neg = r[("mean_delta", "neg")]
+            p_pos = r[("pct_improved", "pos")]
+            p_neg = r[("pct_improved", "neg")]
+            if any(pd.isna(v) for v in [d_pos, d_neg, p_pos, p_neg]):
+                continue
+            print(f"  {layer:>5d} {ac:>7.2f} {d_pos:>10.4f} {d_neg:>10.4f} "
+                  f"{(d_pos + d_neg):>10.4f} {p_pos:>10.3f} {p_neg:>10.3f}")
     print()
 
 
@@ -998,7 +1029,14 @@ def main():
     out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "plots"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    figs: list[tuple[plt.Figure, str]] = []
+    PRIORITY_PLOTS = {
+        "MCF_accuracy_heatmap",
+        "MCF_best_coef_per_layer",
+        "MCF_pos_neg_asymmetry",
+        "CF_sum_accuracy_heatmap",
+        "JOINT_best_layer_MCF_vs_CF",
+    }
+
     counter = [0]
 
     def show(fig, name: str):
@@ -1007,14 +1045,18 @@ def main():
         counter[0] += 1
         fname = f"{counter[0]:02d}_{name}.png"
         fig.savefig(out_dir / fname, bbox_inches="tight")
-        figs.append((fig, fname))
-        print(f"  [{counter[0]:02d}] {fname}")
+        tag = "★ " if name in PRIORITY_PLOTS else "  "
+        print(f"  {tag}[{counter[0]:02d}] {fname}")
+        if name in PRIORITY_PLOTS:
+            plt.show()
+        else:
+            plt.close(fig)
 
     # ------------------------------------------------------------------
     # Numerical tables
     # ------------------------------------------------------------------
     if mcf_summary is not None:
-        print_mcf_numbers(mcf_summary, label)
+        print_mcf_numbers(mcf_summary, label, results=mcf_results)
 
     if cf_summary is not None:
         print_cf_numbers(cf_summary, label)
@@ -1121,9 +1163,9 @@ def main():
              "JOINT_best_coef_alignment")
 
     print(f"\n{'='*60}")
-    print(f"Saved {len(figs)} plots to: {out_dir}")
+    print(f"Saved {counter[0]} plots to: {out_dir}")
+    print(f"(★ = shown interactively, rest saved only)")
     print(f"{'='*60}")
-    plt.show()
 
 
 if __name__ == "__main__":

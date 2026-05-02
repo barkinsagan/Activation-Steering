@@ -1,0 +1,7 @@
+base: configs/exp_20260502_anatomy_sublayer_base.yaml
+experiment_id: exp_20260502_anatomy_norm_mlp
+
+sweep:
+  # MLP output projection — pre residual addition
+  layer_name_pattern: "model.layers.{layer_idx}"
+  sublayer: mlp.down_proj
