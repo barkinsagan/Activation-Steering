@@ -246,9 +246,14 @@ def _print_run_summary(cfg, s, eval_df, pos_prompts_mcf, neg_prompts_mcf,
         for line in text.strip().splitlines():
             print(f"    {line}")
 
-    # One few-shot block (first block of the first neg MCF prompt)
+    # All few-shot blocks (everything except the last block, which is the actual question)
     blocks = pos_prompts_mcf[0].split("\n\n")
-    _show("EXAMPLE few-shot (1 of 5)", blocks[0] if len(blocks) > 1 else "(no few-shots)")
+    fewshot_blocks = blocks[:-1] if len(blocks) > 1 else []
+    if fewshot_blocks:
+        for i, block in enumerate(fewshot_blocks):
+            _show(f"FEW-SHOT {i + 1} of {len(fewshot_blocks)}", block)
+    else:
+        _show("FEW-SHOTS", "(none — zero-shot)")
 
     # Bare capture questions — last block only (strips the few-shot context)
     _show("EXAMPLE MCF pos capture question", pos_prompts_mcf[0].split("\n\n")[-1])
