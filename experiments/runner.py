@@ -246,20 +246,25 @@ def _print_run_summary(cfg, s, eval_df, pos_prompts_mcf, neg_prompts_mcf,
         for line in text.strip().splitlines():
             print(f"    {line}")
 
-    # All few-shot blocks (everything except the last block, which is the actual question)
-    blocks = pos_prompts_mcf[0].split("\n\n")
-    fewshot_blocks = blocks[:-1] if len(blocks) > 1 else []
+    # All few-shot blocks — extracted from the eval formatter, not capture prompts
+    row0 = eval_df.iloc[0]
+    mcf_row0 = formatter.format_mcf(row0, question_idx=0)
+    eval_blocks = mcf_row0.prompt.split("\n\n")
+    fewshot_blocks = eval_blocks[:-1] if len(eval_blocks) > 1 else []
     if fewshot_blocks:
         for i, block in enumerate(fewshot_blocks):
             _show(f"FEW-SHOT {i + 1} of {len(fewshot_blocks)}", block)
     else:
         _show("FEW-SHOTS", "(none — zero-shot)")
 
-    # Bare capture questions — last block only (strips the few-shot context)
-    _show("EXAMPLE MCF pos capture question", pos_prompts_mcf[0].split("\n\n")[-1])
-    _show("EXAMPLE MCF neg capture question", neg_prompts_mcf[0].split("\n\n")[-1])
-    _show("EXAMPLE CF  pos capture question", pos_prompts_cf[0].split("\n\n")[-1])
-    _show("EXAMPLE CF  neg capture question", neg_prompts_cf[0].split("\n\n")[-1])
+    # DIM capture prompts — what the model actually sees when building the steering vector
+    capture_mode_label = "MCF-formatted dataset capture" if dataset_capture else "plain text (text-file mode)"
+    print(f"\n  DIM CAPTURE FORMAT: {capture_mode_label}")
+    _show("POS capture prompt (used to build steering vector)", pos_prompts_mcf[0])
+    _show("NEG capture prompt (used to build steering vector)", neg_prompts_mcf[0])
+    if dataset_capture and pos_prompts_mcf is not pos_prompts_cf:
+        _show("POS capture prompt CF variant", pos_prompts_cf[0])
+        _show("NEG capture prompt CF variant", neg_prompts_cf[0])
 
     # Eval question: a question from the test set (rows after the capture split)
     # This is what the model is actually scored on — steering is never applied during capture

@@ -1,4 +1,4 @@
-experiment_id: exp_20260502_anatomy_llama8b_normalized
+experiment_id: exp_20260502_anatomy_llama8b_norm_negswap
 
 model:
   name: meta-llama/Meta-Llama-3-8B
@@ -7,16 +7,16 @@ model:
 
 dataset:
   eval_path: data/eval/anatomy_sweep.csv
-  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
-  capture_n: 100
+  positive_prompts_path: data/prompts/anatomy_neg.txt   # swapped: general facts as positive
+  negative_prompts_path: data/prompts/anatomy_pos.txt   # swapped: anatomy facts as negative
 
 sweep:
   formulation: both
-  layers: [0, 10, 20, 30]
-  coef_range:                  # 23 values: coarse outside [-2,2], fine inside
-    - [-5,  -2, 1]             # -5, -4, -3, -2
-    - [-2,   2, 0.25]          # -2, -1.75, ..., 0, ..., 1.75, 2
-    - [2,    5, 1]             # 2, 3, 4, 5
+  layers: [0, 15, 25]
+  coef_range:
+    - [-5,  -2, 1]
+    - [-2,   2, 0.25]
+    - [2,    5, 1]
   token_position: last
   normalize_vector: true
   norm_type: unit
