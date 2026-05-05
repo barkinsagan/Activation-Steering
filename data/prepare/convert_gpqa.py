@@ -126,7 +126,7 @@ def convert_domains(
     rows_by_domain: Dict[str, List[Dict]] = {d: [] for d in domains}
 
     for item in ds:
-        domain = item.get("Domain", "")
+        domain = item.get("High-level domain", "")
         if domain in rows_by_domain:
             row = row_to_standard(item)
             if row is not None:
@@ -178,7 +178,7 @@ def convert_general(
     rows_by_domain: Dict[str, List[Dict]] = {d: [] for d in DOMAINS}
 
     for item in ds:
-        domain = item.get("Domain", "")
+        domain = item.get("High-level domain", "")
         if domain in rows_by_domain:
             row = row_to_standard(item)
             if row is not None:
