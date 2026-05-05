@@ -1,0 +1,33 @@
+experiment_id: exp_20260505_gpqa_biology_llama8b
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/gpqa_main_biology_sweep.csv   # ~70 rows: first 50 → steering, ~20 → eval
+  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
+  capture_n: 50
+
+sweep:
+  formulation: mcf
+  layers: null
+  coef_range:
+    - [-2,  -1, 1]
+    - [-1,   1, 0.25]
+    - [ 1,   2, 1]
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+  task_prefix: question
+  num_shots: 5                  # 0-shot for steering capture, 5-shot MMLU for eval
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+  generate_examples: false
+
+output:
+  base_dir: results/
