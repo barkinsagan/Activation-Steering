@@ -152,6 +152,66 @@ def convert_domains(
         save_csv(eval_rows,  out_dir / f"{prefix}_eval.csv",  STANDARD_COLUMNS_MCQ)
 
 
+def convert_general(
+    ds,
+    steering_n_per_domain: int,
+    subset: str,
+    out_dir: Path,
+    fewshot_dir: Path,
+    fewshot_n: int = 5,
+    seed: int = 42,
+):
+    """
+    Build a merged 'general science' CSV with a fixed structure:
+      rows 0   .. steering_n*3-1  : steering rows (steering_n from each domain, in order Bio→Chem→Phys)
+      rows steering_n*3 .. end    : eval rows (all remaining from every domain, shuffled together)
+
+    The runner reads this as: capture_n = steering_n*3 rows for positive DIM capture,
+    everything after for evaluation.
+
+    fewshot_n rows are skipped from the top of each domain's shuffled pool so they
+    don't bleed into the steering or eval sets.
+    """
+    import random
+
+    DOMAINS = ["Biology", "Chemistry", "Physics"]
+    rows_by_domain: Dict[str, List[Dict]] = {d: [] for d in DOMAINS}
+
+    for item in ds:
+        domain = item.get("Domain", "")
+        if domain in rows_by_domain:
+            row = row_to_standard(item)
+            if row is not None:
+                rows_by_domain[domain].append(row)
+
+    steering_rows: List[Dict] = []
+    eval_rows:     List[Dict] = []
+
+    for domain in DOMAINS:
+        rows = validate_rows(rows_by_domain[domain])
+        rng = random.Random(seed)
+        rng.shuffle(rows)
+        # Skip fewshot_n rows for consistency with per-domain converter
+        pool = rows[fewshot_n:] if fewshot_n > 0 and len(rows) > fewshot_n else rows
+        steering_rows.extend(pool[:steering_n_per_domain])
+        eval_rows.extend(pool[steering_n_per_domain:])
+        actual_s = min(steering_n_per_domain, len(pool))
+        actual_e = max(0, len(pool) - steering_n_per_domain)
+        print(f"  [{domain}] steering={actual_s}  eval={actual_e}")
+
+    # Shuffle eval rows so domains are interleaved
+    random.Random(seed).shuffle(eval_rows)
+
+    combined = steering_rows + eval_rows
+    label  = subset.replace("gpqa_", "")
+    prefix = f"gpqa_{label}_general"
+
+    print(f"\n[General science] steering={len(steering_rows)} ({steering_n_per_domain}/domain)"
+          f"  eval={len(eval_rows)}  total={len(combined)}")
+
+    save_csv(combined, out_dir / f"{prefix}_sweep.csv", STANDARD_COLUMNS_MCQ)
+
+
 def convert_all_combined(
     ds,
     sweep_n: int,
@@ -192,6 +252,10 @@ def main():
                         help="Domains to convert: Biology Chemistry Physics")
     parser.add_argument("--all", action="store_true",
                         help="Convert all domains + combined set")
+    parser.add_argument("--general", action="store_true",
+                        help="Build merged general-science CSV (steering_n per domain + remaining eval)")
+    parser.add_argument("--steering_n", type=int, default=50,
+                        help="Steering rows per domain for --general (default: 50)")
     parser.add_argument("--subset", default="gpqa_main",
                         choices=VALID_SUBSETS,
                         help="GPQA subset to use (default: gpqa_main)")
@@ -206,8 +270,8 @@ def main():
     parser.add_argument("--fewshot_dir", default="data/fewshots")
     args = parser.parse_args()
 
-    if not args.domains and not args.all:
-        parser.error("Specify --domains or --all")
+    if not args.domains and not args.all and not args.general:
+        parser.error("Specify --domains, --all, or --general")
 
     out_dir     = Path(args.out_dir)
     fewshot_dir = Path(args.fewshot_dir)
@@ -231,6 +295,10 @@ def main():
                         args.subset, out_dir, fewshot_dir, args.fewshot_n, args.seed)
         convert_all_combined(ds, args.sweep_n, args.eval_n, args.subset,
                              out_dir, fewshot_dir, args.fewshot_n, args.seed)
+
+    if args.general:
+        convert_general(ds, args.steering_n, args.subset,
+                        out_dir, fewshot_dir, args.fewshot_n, args.seed)
 
 
 if __name__ == "__main__":
