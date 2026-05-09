@@ -13,7 +13,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -447,6 +447,7 @@ def sweep_layers_mcf(
     resume:             bool = True,
     start_layer:        Optional[int] = None,
     coef_batch_size:    int = 0,
+    on_layer_complete:  Optional[Callable[[int, pd.DataFrame], None]] = None,
 ) -> Dict[str, Any]:
     """
     Sweep steering vectors across layers, logging single-token metrics.
@@ -517,6 +518,11 @@ def sweep_layers_mcf(
             for _, r in df[df["coef"] == 0.0].iterrows():
                 key = (int(r["layer"]), int(r["question_id"]))
                 logger._baselines[key] = (float(r["correct_label_logprob"]), int(r["correct_label_rank"]))
+            if on_layer_complete is not None:
+                try:
+                    on_layer_complete(layer_idx, df)
+                except Exception as e:
+                    print(f"  on_layer_complete callback raised: {e}")
             continue
 
         # --- Build steering vector for this layer ---
@@ -560,6 +566,12 @@ def sweep_layers_mcf(
         print(f"\n>>> Layer {layer_idx} COMPLETE — {len(layer_df)} records written to {layer_result_path}")
 
         layer_dfs.append(layer_df)
+
+        if on_layer_complete is not None:
+            try:
+                on_layer_complete(layer_idx, layer_df)
+            except Exception as e:
+                print(f"  on_layer_complete callback raised: {e}")
 
         # Checkpoint combined files after every layer so a crash loses at most one layer.
         # Scan disk so partial-session runs include layers from prior sessions too.

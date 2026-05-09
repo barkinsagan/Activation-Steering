@@ -29,3 +29,11 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: false                # set true to log this run to W&B
+  project: steering-vectors     # W&B project name
+  entity: null                  # null = use default account; otherwise team/user
+  tags: []                      # e.g. [llama3, anatomy]
+  notes: ""                     # free-text run description
+  mode: online                  # online | offline | disabled

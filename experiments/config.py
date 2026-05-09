@@ -69,6 +69,16 @@ class OutputConfig:
     base_dir: str = "results/"
 
 
+@dataclass
+class WandbConfig:
+    enabled: bool = False
+    project: str = "steering-vectors"
+    entity: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    notes: str = ""
+    mode: str = "online"   # online | offline | disabled
+
+
 # =============================================================================
 # Top-level config
 # =============================================================================
@@ -80,6 +90,7 @@ class ExperimentConfig:
     dataset: DatasetConfig
     sweep: SweepConfig
     output: OutputConfig
+    wandb: WandbConfig = field(default_factory=WandbConfig)
 
     @property
     def output_dir(self) -> Path:
@@ -151,6 +162,7 @@ def load_config(path: str) -> ExperimentConfig:
             sweep_raw["coef_list"] = coefs
         sweep = SweepConfig(**sweep_raw)
         output = OutputConfig(**raw.get("output", {}))
+        wandb_cfg = WandbConfig(**raw.get("wandb", {}))
         experiment_id = raw["experiment_id"]
     except (KeyError, TypeError) as e:
         print(f"Config error in {path}: {e}", file=sys.stderr)
@@ -162,6 +174,7 @@ def load_config(path: str) -> ExperimentConfig:
         dataset=dataset,
         sweep=sweep,
         output=output,
+        wandb=wandb_cfg,
     )
 
     _validate(cfg, path)

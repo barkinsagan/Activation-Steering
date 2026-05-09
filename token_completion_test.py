@@ -923,6 +923,7 @@ def sweep_layers_cf(
     resume: bool = True,
     start_layer: Optional[int] = None,
     coef_batch_size: int = 0,
+    on_layer_complete: Optional[Callable[[int, pd.DataFrame], None]] = None,
 ) -> Dict[str, Any]:
     """
     Sweep steering vectors across layers and save results.
@@ -997,6 +998,11 @@ def sweep_layers_cf(
             layer_summary = pd.read_csv(existing_summary)
             layer_summary["layer"] = layer_idx
             layer_summaries.append(layer_summary)
+            if on_layer_complete is not None:
+                try:
+                    on_layer_complete(layer_idx, layer_summary)
+                except Exception as e:
+                    print(f"  on_layer_complete callback raised: {e}")
             continue
 
         # Construct layer name using pattern
@@ -1054,6 +1060,16 @@ def sweep_layers_cf(
         if combined_summary is not None:
             combined_summary.to_csv(out_path / "combined_summary.csv", index=False)
             layer_summaries = [combined_summary]  # keep in-memory list consistent
+
+        if on_layer_complete is not None:
+            this_layer_summary = _find_summary_csv(out_path / f"layer_{layer_idx}")
+            if this_layer_summary is not None:
+                try:
+                    df = pd.read_csv(this_layer_summary)
+                    df["layer"] = layer_idx
+                    on_layer_complete(layer_idx, df)
+                except Exception as e:
+                    print(f"  on_layer_complete callback raised: {e}")
 
         print(f"\n>>> Layer {layer_idx} DONE. Results saved to {out_path / f'layer_{layer_idx}'}")
 

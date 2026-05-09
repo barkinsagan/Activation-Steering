@@ -23,6 +23,7 @@ from experiments.registry import (
     load_eval_dataset, load_model, load_steering_prompts,
     df_to_fewshot_examples, build_capture_prompts_mcf, build_capture_prompts_cf,
 )
+from experiments import wandb_logger
 from olmes.formatter import build_formatter
 
 
@@ -46,6 +47,14 @@ def run_experiment(cfg: ExperimentConfig):
     _save_config_snapshot(cfg, config_snapshot)
     _save_experiment_details(cfg, out_dir / "experiment_details.txt")
 
+    wandb_run = wandb_logger.init_run(cfg)
+    try:
+        _run_experiment_body(cfg, out_dir, wandb_run)
+    finally:
+        wandb_logger.finish_run(wandb_run)
+
+
+def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
     # --- Load model ---
     model, tokenizer = load_model(cfg)
     s = cfg.sweep
@@ -113,7 +122,11 @@ def run_experiment(cfg: ExperimentConfig):
     # --- MCF sweep ---
     if run_mcf:
         print(f"\n>>> Running MCF sweep")
-        from single_token_completion_test import sweep_layers_mcf
+        from single_token_completion_test import sweep_layers_mcf, _compute_summary as _mcf_summary
+
+        mcf_callback = wandb_logger.make_layer_callback(
+            wandb_run, prefix="mcf", summarize_fn=_mcf_summary,
+        )
 
         sweep_layers_mcf(
             model=model,
@@ -132,6 +145,7 @@ def run_experiment(cfg: ExperimentConfig):
             verbose_every=s.verbose_every,
             resume=s.resume,
             coef_batch_size=s.coef_batch_size,
+            on_layer_complete=mcf_callback,
         )
 
     # --- CF sweep ---
@@ -139,6 +153,11 @@ def run_experiment(cfg: ExperimentConfig):
         if has_false_targets:
             print(f"\n>>> Running CF sweep  (false cols: {false_cols})")
             from token_completion_test import sweep_layers_cf
+
+            # CF summary.csv is already aggregated per coef → identity summarize_fn
+            cf_callback = wandb_logger.make_layer_callback(
+                wandb_run, prefix="cf", summarize_fn=lambda df: df,
+            )
 
             sweep_layers_cf(
                 model=model,
@@ -158,6 +177,7 @@ def run_experiment(cfg: ExperimentConfig):
                 verbose_every=s.verbose_every,
                 resume=s.resume,
                 coef_batch_size=s.coef_batch_size,
+                on_layer_complete=cf_callback,
             )
         else:
             print(f"\n>>> Running CF sweep  (target only, no false cols)")
@@ -170,6 +190,7 @@ def run_experiment(cfg: ExperimentConfig):
                 formatter=formatter,
                 cfg=cfg,
                 out_dir=out_dir / "cf",
+                wandb_run=wandb_run,
             )
 
     # --- Qualitative examples ---
@@ -398,7 +419,7 @@ def _generate_examples_sweep(
 # =============================================================================
 
 def _run_cf_target_only(model, tokenizer, eval_df, pos_prompts,
-                        neg_prompts, formatter, cfg, out_dir):
+                        neg_prompts, formatter, cfg, out_dir, wandb_run=None):
     """
     Run continuation scoring when there are no false targets.
     Logs logprob of the full target string per (layer, question, coef).
@@ -507,6 +528,19 @@ def _run_cf_target_only(model, tokenizer, eval_df, pos_prompts,
         if combined is not None:
             combined.to_csv(out_path / "combined_results.csv", index=False)
             _save_continuation_summary(combined, out_path / "combined_summary.csv")
+
+        if wandb_run is not None:
+            try:
+                summary_path = out_path / "combined_summary.csv"
+                if summary_path.exists():
+                    layer_summary = pd.read_csv(summary_path)
+                    layer_summary = layer_summary[layer_summary["layer"] == layer_idx]
+                    if len(layer_summary):
+                        wandb_logger._log_summary_rows(
+                            wandb_run, layer_summary, prefix="cf", step=int(layer_idx),
+                        )
+            except Exception as e:
+                print(f"  wandb log raised: {e}")
 
         dim_steerer.cleanup()
 

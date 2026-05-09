@@ -1,0 +1,35 @@
+experiment_id: exp_test_wandb
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/anatomy_sweep_150.csv
+  positive_prompts_path: data/prompts/anatomy_pos.txt
+  negative_prompts_path: data/prompts/anatomy_neg.txt
+
+sweep:
+  formulation: mcf            # mcf only — fastest path
+  layers: [10, 15]            # just 2 layers
+  coef_list: [-5, 5]          # baseline (0) is added automatically
+  token_position: last
+  normalize_vector: false
+  task_prefix: question
+  num_shots: 0                # zero-shot to skip fewshot loading
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: false               # don't skip work — we want fresh wandb logs
+  generate_examples: false    # skip qualitative generation (slow)
+
+output:
+  base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors-test
+  tags: [test, wandb-integration]
+  notes: "smoke test for wandb integration"
+  mode: offline               # writes to ./wandb/ locally, no account needed
