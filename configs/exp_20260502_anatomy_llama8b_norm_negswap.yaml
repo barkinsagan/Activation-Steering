@@ -32,3 +32,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, anatomy, mcf-cf, text-file-capture, normalized-unit, neg-swap]
+  notes: "Pos/neg prompts swapped — sanity check that direction matters"
+  mode: online

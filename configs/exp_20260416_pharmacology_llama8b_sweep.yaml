@@ -31,3 +31,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, pharmacology, mcf-cf, text-file-capture]
+  notes: "Pharmacology sweep, all 32 layers, mixed coef grid (no normalization)"
+  mode: online

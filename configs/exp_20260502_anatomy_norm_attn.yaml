@@ -5,3 +5,7 @@ sweep:
   # Attention output projection — pre residual addition
   layer_name_pattern: "model.layers.{layer_idx}"
   sublayer: self_attn.o_proj
+
+wandb:
+  tags: [llama3-8b, anatomy, mcf-cf, dataset-capture, normalized-unit, sublayer-attn]
+  notes: "Sublayer sweep: attention o_proj output"

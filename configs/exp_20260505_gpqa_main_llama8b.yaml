@@ -31,3 +31,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, gpqa-main, mcf, dataset-capture, normalized-unit]
+  notes: "GPQA main sweep, all 32 layers, mixed coef grid, MMLU non-med as neg capture"
+  mode: online

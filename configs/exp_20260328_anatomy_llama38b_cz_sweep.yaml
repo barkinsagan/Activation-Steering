@@ -5,3 +5,7 @@ experiment_id: exp_20260328_anatomy_llama38b_cz_sweep
 
 sweep:
   formulation: cf             # CF only — model is blind to alternatives
+
+wandb:
+  tags: [llama3-8b, anatomy, cf-only, text-file-capture]
+  notes: "Anatomy CF-only sweep, all 32 layers"

@@ -9,3 +9,6 @@ sweep:
   num_shots: 0                 # zero-shot until fewshot data is generated
   fewshot_source: ""
   verbose_every: 5
+
+wandb:
+  enabled: false               # smoke test — don't pollute the real project

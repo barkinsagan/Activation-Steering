@@ -10,3 +10,7 @@ dataset:
 
 sweep:
   fewshot_source: data/fewshots/medmcqa_all_fewshot.yaml
+
+wandb:
+  tags: [llama3-8b, medical-general, mcf-cf, text-file-capture]
+  notes: "Phase B: medical-general vector tested on mixed all-subjects medmcqa set"

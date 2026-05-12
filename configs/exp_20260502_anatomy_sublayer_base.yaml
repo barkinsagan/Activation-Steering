@@ -33,3 +33,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, anatomy, mcf-cf, dataset-capture, normalized-unit, sublayer-sweep]
+  notes: "Sublayer comparison base — override sublayer in child configs"
+  mode: online

@@ -10,3 +10,7 @@ dataset:
 
 sweep:
   fewshot_source: data/fewshots/pharmacology_fewshot.yaml
+
+wandb:
+  tags: [llama3-8b, pharmacology, mcf-cf, text-file-capture]
+  notes: "Pharmacology subset with subject-specific steering prompts"

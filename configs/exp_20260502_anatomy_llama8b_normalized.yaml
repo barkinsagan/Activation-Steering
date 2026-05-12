@@ -32,3 +32,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, anatomy, mcf-cf, dataset-capture, normalized-unit]
+  notes: "Anatomy sweep, 4 layers, fine-grained coef grid in [-2,2], MMLU non-med neg capture"
+  mode: online

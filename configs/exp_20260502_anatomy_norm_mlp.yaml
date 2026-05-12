@@ -5,3 +5,7 @@ sweep:
   # MLP output projection — pre residual addition
   layer_name_pattern: "model.layers.{layer_idx}"
   sublayer: mlp.down_proj
+
+wandb:
+  tags: [llama3-8b, anatomy, mcf-cf, dataset-capture, normalized-unit, sublayer-mlp]
+  notes: "Sublayer sweep: MLP down_proj output"

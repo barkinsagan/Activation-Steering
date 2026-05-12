@@ -28,3 +28,10 @@ sweep:
 
 output:
   base_dir: results/anatomy_mlp/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, anatomy, mcf-cf, dataset-capture, sublayer-mlp]
+  notes: "Anatomy MLP-sublayer sweep (5 layers), fine coef grid in [-2,2]"
+  mode: online

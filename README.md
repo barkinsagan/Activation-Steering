@@ -23,6 +23,14 @@ Each dataset has its own step-by-step guide covering data preparation, available
 
 ---
 
+## Tooling
+
+| Topic | Guide |
+|---|---|
+| **Weights & Biases logging** | [README_WANDB.md](README_WANDB.md) — setup, config reference, what gets logged where, and the full parameter dictionary for `experiments/runner.py`. |
+
+---
+
 ## Project Structure
 
 ```

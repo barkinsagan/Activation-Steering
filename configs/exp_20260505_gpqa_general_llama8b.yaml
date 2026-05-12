@@ -33,3 +33,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, gpqa-general, mcf-cf, dataset-capture, normalized-unit]
+  notes: "GPQA general (50 bio + 50 chem + 50 phys → steering), 6 layers"
+  mode: online

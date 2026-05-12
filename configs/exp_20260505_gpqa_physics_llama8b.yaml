@@ -31,3 +31,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, gpqa-physics, mcf-cf, dataset-capture, normalized-unit]
+  notes: "GPQA physics subset, 6 layers, MMLU non-med as neg capture"
+  mode: online

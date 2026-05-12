@@ -5,3 +5,7 @@ experiment_id: exp_20260328_anatomy_mistral7b_mcq_sweep
 
 model:
   name: mistralai/Mistral-7B-v0.1
+
+wandb:
+  tags: [mistral-7b, anatomy, mcf-cf, text-file-capture]
+  notes: "Anatomy MCQ sweep on Mistral-7B (compare to Llama-3-8B baseline)"

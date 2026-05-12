@@ -27,3 +27,10 @@ sweep:
 
 output:
   base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, anatomy, mcf-cf, text-file-capture]
+  notes: "Anatomy MCQ sweep, all 32 layers, text-file steering prompts"
+  mode: online

@@ -4,3 +4,7 @@ experiment_id: exp_20260502_anatomy_norm_block
 sweep:
   # Full transformer block output (post-attention + post-MLP residual stream)
   layer_name_pattern: "model.layers.{layer_idx}"
+
+wandb:
+  tags: [llama3-8b, anatomy, mcf-cf, dataset-capture, normalized-unit, sublayer-block]
+  notes: "Sublayer sweep: full block output (post-residual)"
