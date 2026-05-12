@@ -5,10 +5,16 @@ experiment_id: smoke_test
 sweep:
   formulation: both
   layers: [10, 15, 20]         # 3 layers instead of all 32
-  coef_list: [0, 5]            # baseline + one positive coef
-  num_shots: 0                 # zero-shot until fewshot data is generated
+  coef_list: [5]               # baseline (0) is added automatically
+  num_shots: 0
   fewshot_source: ""
   verbose_every: 5
+  resume: false                # always re-run clean
+  generate_examples: false     # skip slow generation
 
 wandb:
-  enabled: false               # smoke test — don't pollute the real project
+  enabled: true
+  project: steering-vectors-test
+  tags: [smoke-test, wandb-integration]
+  notes: "Smoke test — wandb online mode check"
+  mode: online
