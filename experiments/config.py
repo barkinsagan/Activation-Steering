@@ -229,6 +229,10 @@ def _validate(cfg: ExperimentConfig, path: Path):
     if cfg.model.dtype not in valid_dtype:
         errors.append(f"  dtype must be one of {valid_dtype}")
 
+    valid_device = {"cuda", "cpu", "auto", "balanced", "balanced_low_0", "sequential"}
+    if not (cfg.model.device in valid_device or cfg.model.device.startswith("cuda:")):
+        errors.append(f"  device must be one of {valid_device} or 'cuda:N'")
+
     valid_prefix = {"question", "goal", "fill_in_the_blank", "continuation"}
     if cfg.sweep.task_prefix not in valid_prefix:
         errors.append(f"  task_prefix must be one of {valid_prefix}")

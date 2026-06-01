@@ -3,7 +3,7 @@ experiment_id: example_experiment
 model:
   name: meta-llama/Meta-Llama-3-8B
   dtype: float16
-  device: cuda
+  device: cuda        # cuda | cpu | auto (multi-GPU) | balanced | cuda:N
 
 dataset:
   eval_path: data/eval/my_dataset.csv           # columns: prompt, target [, false1, false2, false3]
