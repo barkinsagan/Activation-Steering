@@ -118,3 +118,45 @@ def build_capture_prompts_cf(df: pd.DataFrame, formatter, n: int) -> List[str]:
         cf_row = formatter.format_cf(row)
         prompts.append(cf_row.prompt + cf_row.target)
     return prompts
+
+
+# =============================================================================
+# Random split
+# =============================================================================
+
+def split_dataset(
+    df: pd.DataFrame,
+    split_cfg,
+    seed: int = 42,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, List[int], List[int], List[int]]:
+    """Randomly split df into steering, validation, and test sets.
+
+    Returns:
+        steering_df, val_df, test_df: the three DataFrames (reset index)
+        steer_indices, val_indices, test_indices: original row positions in df
+    """
+    import numpy as np
+
+    n = len(df)
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(n).tolist()
+
+    n_steer = round(n * split_cfg.steering / 100)
+    n_val   = round(n * split_cfg.validation / 100)
+    # test gets the remainder to absorb rounding drift
+
+    steer_idx = sorted(perm[:n_steer])
+    val_idx   = sorted(perm[n_steer: n_steer + n_val])
+    test_idx  = sorted(perm[n_steer + n_val:])
+
+    steering_df = df.iloc[steer_idx].reset_index(drop=True)
+    val_df      = df.iloc[val_idx].reset_index(drop=True)
+    test_df     = df.iloc[test_idx].reset_index(drop=True)
+
+    print(
+        f"Random split (seed={seed}): "
+        f"{len(steering_df)} steering ({split_cfg.steering}%) / "
+        f"{len(val_df)} validation ({split_cfg.validation}%) / "
+        f"{len(test_df)} test ({split_cfg.test}%)"
+    )
+    return steering_df, val_df, test_df, steer_idx, val_idx, test_idx

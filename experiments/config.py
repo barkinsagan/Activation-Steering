@@ -24,12 +24,20 @@ class ModelConfig:
 
 
 @dataclass
+class SplitConfig:
+    steering: int = 20    # % of eval CSV used for positive DIM capture
+    validation: int = 20  # % of eval CSV used for validation
+    test: int = 60        # % of eval CSV used for held-out test
+
+
+@dataclass
 class DatasetConfig:
     eval_path: str                            # CSV with prompt, target, [false1, false2, ...]
     neg_capture_path: str = ""                # MMLU general CSV — neg capture + few-shots source
-    capture_n: int = 100                      # rows from each CSV used for DIM capture
+    capture_n: int = 100                      # rows for DIM capture (legacy; ignored when split is set)
     positive_prompts_path: str = ""           # legacy text-file mode
     negative_prompts_path: str = ""           # legacy text-file mode
+    split: Optional[SplitConfig] = None       # random train/val/test split config
 
 
 @dataclass
@@ -46,6 +54,7 @@ class SweepConfig:
     num_shots: int = 5
     fewshot_source: str = ""             # path to data/fewshots/*.yaml (empty = zero-shot)
     shuffle_choices: bool = True         # randomise MCF label assignment per question
+    seed: int = 42                        # random seed for splits, formatter, example sampling
     layer_name_pattern: str = "model.layers.{layer_idx}"
     sublayer: Optional[str] = None       # e.g. "mlp", "self_attn", "mlp.down_proj"
     max_length: int = 2048
@@ -73,10 +82,11 @@ class OutputConfig:
 class WandbConfig:
     enabled: bool = False
     project: str = "steering-vectors"
-    entity: Optional[str] = None
+    entity: Optional[str] = "steering-team"  # W&B team name; None = personal account
     tags: List[str] = field(default_factory=list)
     notes: str = ""
-    mode: str = "online"   # online | offline | disabled
+    mode: str = "online"                      # online | offline | disabled
+    best_coef_criterion: str = "val_acc"      # val_acc | val_delta
 
 
 # =============================================================================
@@ -141,7 +151,11 @@ def load_config(path: str) -> ExperimentConfig:
 
     try:
         model = ModelConfig(**raw["model"])
-        dataset = DatasetConfig(**raw["dataset"])
+        dataset_raw = dict(raw["dataset"])
+        split_raw = dataset_raw.pop("split", None)
+        dataset = DatasetConfig(**dataset_raw)
+        if split_raw is not None:
+            dataset.split = SplitConfig(**split_raw)
         sweep_raw = raw.get("sweep", {})
         # Resolve coef_range → coef_list before constructing SweepConfig
         # Supports two formats:
@@ -223,10 +237,28 @@ def _validate(cfg: ExperimentConfig, path: Path):
     if cfg.sweep.cf_normalization not in valid_cf_norm:
         errors.append(f"  cf_normalization must be one of {valid_cf_norm}")
 
+    valid_best_coef = {"val_acc", "val_delta"}
+    if cfg.wandb.best_coef_criterion not in valid_best_coef:
+        errors.append(f"  wandb.best_coef_criterion must be one of {valid_best_coef}")
+
     if cfg.sweep.fewshot_source:
         from pathlib import Path as _Path
         if not _Path(cfg.sweep.fewshot_source).exists():
             errors.append(f"  fewshot_source: file not found: {cfg.sweep.fewshot_source}")
+
+    # Split config validation
+    if cfg.dataset.split is not None:
+        sp = cfg.dataset.split
+        total = sp.steering + sp.validation + sp.test
+        if total != 100:
+            errors.append(
+                f"  split percentages must sum to 100, got {sp.steering}+{sp.validation}+{sp.test}={total}"
+            )
+        for label, val in [("steering", sp.steering), ("validation", sp.validation), ("test", sp.test)]:
+            if val <= 0:
+                errors.append(f"  split.{label} must be > 0, got {val}")
+        if not cfg.dataset.neg_capture_path:
+            errors.append("  split: requires neg_capture_path to be set")
 
     if errors:
         print(f"\nValidation errors in {path}:")

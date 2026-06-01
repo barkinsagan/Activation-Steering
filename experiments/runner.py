@@ -22,6 +22,7 @@ from experiments.config import ExperimentConfig, load_config
 from experiments.registry import (
     load_eval_dataset, load_model, load_steering_prompts,
     df_to_fewshot_examples, build_capture_prompts_mcf, build_capture_prompts_cf,
+    split_dataset,
 )
 from experiments import wandb_logger
 from olmes.formatter import build_formatter
@@ -66,15 +67,15 @@ def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
         import pandas as pd
         full_eval_df = pd.read_csv(cfg.dataset.eval_path)
         neg_df       = pd.read_csv(cfg.dataset.neg_capture_path)
-        capture_n    = cfg.dataset.capture_n
+        false_cols   = [c for c in ["false1", "false2", "false3"] if c in full_eval_df.columns]
 
-        # Few-shots: first num_shots rows of the MMLU general CSV (eval only, not capture)
+        # Few-shots: first num_shots rows of the MMLU general CSV
         fewshot_examples = df_to_fewshot_examples(neg_df, s.num_shots)
         formatter = build_formatter(
             task_prefix=s.task_prefix,
             num_shots=s.num_shots,
             shuffle_choices=s.shuffle_choices,
-            seed=42,
+            seed=s.seed,
             fewshot_examples=fewshot_examples,
         )
         # Zero-shot formatter for DIM capture — no shared context between pos and neg
@@ -82,16 +83,46 @@ def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
             task_prefix=s.task_prefix,
             num_shots=0,
             shuffle_choices=s.shuffle_choices,
-            seed=42,
+            seed=s.seed,
         )
 
-        # Pos capture: first capture_n rows of eval CSV
-        pos_df = full_eval_df.iloc[:capture_n]
-        # Neg capture: rows after few-shots to avoid overlap
-        neg_capture_df = neg_df.iloc[s.num_shots: s.num_shots + capture_n]
-        # Eval: remaining rows of eval CSV
-        eval_df   = full_eval_df.iloc[capture_n:].reset_index(drop=True)
-        false_cols = [c for c in ["false1", "false2", "false3"] if c in full_eval_df.columns]
+        if cfg.dataset.split is not None:
+            # --- Random split mode ---
+            steering_df, val_df, test_df, steer_idx, val_idx, test_idx = split_dataset(
+                full_eval_df, cfg.dataset.split, seed=s.seed,
+            )
+
+            # Randomly sample neg_capture from neg pool (after few-shots rows)
+            neg_pool = neg_df.iloc[s.num_shots:].reset_index(drop=True)
+            n_neg = len(steering_df)
+            neg_capture_df = neg_pool.sample(
+                n=min(n_neg, len(neg_pool)),
+                random_state=s.seed,
+            ).reset_index(drop=True)
+
+            # Combine val + test into eval_df with a 'split' column for post-hoc filtering
+            val_tagged  = val_df.copy();  val_tagged["split"]  = "validation"
+            test_tagged = test_df.copy(); test_tagged["split"] = "test"
+            eval_df = pd.concat([val_tagged, test_tagged], ignore_index=True)
+
+            # Save split manifest: eval_question_id (0-based in eval_df) → original_index → split
+            manifest_rows = (
+                [{"eval_question_id": i, "original_index": orig, "split": "validation"}
+                 for i, orig in enumerate(val_idx)]
+                + [{"eval_question_id": len(val_df) + i, "original_index": orig, "split": "test"}
+                   for i, orig in enumerate(test_idx)]
+            )
+            pd.DataFrame(manifest_rows).to_csv(out_dir / "split_manifest.csv", index=False)
+            print(f"Saved split manifest: {out_dir / 'split_manifest.csv'}")
+
+            pos_df    = steering_df
+            capture_n = len(steering_df)
+        else:
+            # --- Legacy positional mode ---
+            capture_n      = cfg.dataset.capture_n
+            pos_df         = full_eval_df.iloc[:capture_n]
+            neg_capture_df = neg_df.iloc[s.num_shots: s.num_shots + capture_n]
+            eval_df        = full_eval_df.iloc[capture_n:].reset_index(drop=True)
 
         pos_prompts_mcf = build_capture_prompts_mcf(pos_df, capture_formatter, capture_n)
         neg_prompts_mcf = build_capture_prompts_mcf(neg_capture_df, capture_formatter, len(neg_capture_df))
@@ -105,7 +136,7 @@ def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
             num_shots=s.num_shots,
             fewshot_source=s.fewshot_source,
             shuffle_choices=s.shuffle_choices,
-            seed=42,
+            seed=s.seed,
         )
         # Legacy mode: same prompts for both sweep types
         pos_prompts_mcf = pos_prompts_cf = pos_prompts
@@ -193,6 +224,9 @@ def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
                 wandb_run=wandb_run,
             )
 
+    # --- Final W&B summary (tables + overview plot) ---
+    wandb_logger.log_final_summary(wandb_run, cfg, eval_df, out_dir)
+
     # --- Qualitative examples ---
     if cfg.sweep.generate_examples:
         print(f"\n>>> Generating qualitative examples")
@@ -245,14 +279,28 @@ def _print_run_summary(cfg, s, eval_df, pos_prompts_mcf, neg_prompts_mcf,
     print(f"    formulation   : {s.formulation}")
     print(f"    coefs         : {s.coef_list}")
     print(f"    eval rows     : {len(eval_df)}")
+    if dataset_capture and cfg.dataset.split is not None:
+        sp = cfg.dataset.split
+        n_val  = sum(1 for _ in eval_df[eval_df["split"] == "validation"].itertuples()) if "split" in eval_df.columns else "?"
+        n_test = sum(1 for _ in eval_df[eval_df["split"] == "test"].itertuples()) if "split" in eval_df.columns else "?"
+        print(f"      validation  : {n_val} rows ({sp.validation}%)")
+        print(f"      test        : {n_test} rows ({sp.test}%)")
 
     # Capture / steering prompts
     print(f"\n  STEERING PROMPTS  ({'dataset capture' if dataset_capture else 'text-file mode'})")
     if dataset_capture:
-        print(f"    pos source    : {cfg.dataset.eval_path}  rows 0–{cfg.dataset.capture_n - 1}")
-        print(f"    neg source    : {cfg.dataset.neg_capture_path}"
-              f"  rows {s.num_shots}–{s.num_shots + cfg.dataset.capture_n - 1}")
-        print(f"    fewshot src   : {cfg.dataset.neg_capture_path}  rows 0–{s.num_shots - 1}")
+        if cfg.dataset.split is not None:
+            sp = cfg.dataset.split
+            print(f"    mode          : random split (seed={s.seed})")
+            print(f"    pos source    : {cfg.dataset.eval_path}  {sp.steering}% randomly sampled")
+            print(f"    neg source    : {cfg.dataset.neg_capture_path}  {sp.steering}% randomly sampled (after {s.num_shots} few-shot rows)")
+            print(f"    fewshot src   : {cfg.dataset.neg_capture_path}  rows 0–{s.num_shots - 1}")
+        else:
+            print(f"    mode          : legacy positional (capture_n={cfg.dataset.capture_n})")
+            print(f"    pos source    : {cfg.dataset.eval_path}  rows 0–{cfg.dataset.capture_n - 1}")
+            print(f"    neg source    : {cfg.dataset.neg_capture_path}"
+                  f"  rows {s.num_shots}–{s.num_shots + cfg.dataset.capture_n - 1}")
+            print(f"    fewshot src   : {cfg.dataset.neg_capture_path}  rows 0–{s.num_shots - 1}")
     else:
         print(f"    pos file      : {cfg.dataset.positive_prompts_path}"
               f"  ({len(pos_prompts_mcf)} prompts)")
@@ -343,7 +391,7 @@ def _generate_examples_sweep(
     model_with_hooks = ModelWithHooks(model)
     layers = s.layers if s.layers else list(range(model.config.num_hidden_layers))
 
-    rng = random.Random(42)
+    rng = random.Random(s.seed)
     sample_indices = rng.sample(range(len(eval_df)), min(s.n_examples, len(eval_df)))
     coefs = [0.0] + [c for c in s.coef_list if c != 0.0]
 
@@ -613,10 +661,22 @@ def _save_experiment_details(cfg: ExperimentConfig, path: Path):
         f"  capture_mode   : {'dataset (MCF-formatted)' if dataset_capture else 'text-file (plain sentences)'}",
     ]
     if dataset_capture:
-        lines += [
-            f"  pos_capture    : {cfg.dataset.eval_path}  rows 0–{cfg.dataset.capture_n - 1}",
-            f"  neg_capture    : {cfg.dataset.neg_capture_path}  rows {s.num_shots}–{s.num_shots + cfg.dataset.capture_n - 1}",
-        ]
+        if cfg.dataset.split is not None:
+            sp = cfg.dataset.split
+            lines += [
+                f"  split_mode     : random (seed={s.seed})",
+                f"  split.steering : {sp.steering}%  → pos DIM capture",
+                f"  split.validation: {sp.validation}%",
+                f"  split.test     : {sp.test}%",
+                f"  pos_capture    : {cfg.dataset.eval_path}  (randomly sampled {sp.steering}%)",
+                f"  neg_capture    : {cfg.dataset.neg_capture_path}  (randomly sampled {sp.steering}% from rows after few-shots)",
+            ]
+        else:
+            lines += [
+                f"  split_mode     : legacy positional (capture_n={cfg.dataset.capture_n})",
+                f"  pos_capture    : {cfg.dataset.eval_path}  rows 0–{cfg.dataset.capture_n - 1}",
+                f"  neg_capture    : {cfg.dataset.neg_capture_path}  rows {s.num_shots}–{s.num_shots + cfg.dataset.capture_n - 1}",
+            ]
     else:
         lines += [
             f"  pos_prompts    : {cfg.dataset.positive_prompts_path}",

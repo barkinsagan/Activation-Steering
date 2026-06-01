@@ -7,10 +7,15 @@ model:
 
 dataset:
   eval_path: data/eval/my_dataset.csv           # columns: prompt, target [, false1, false2, false3]
-  positive_prompts_path: data/prompts/pos.txt   # one prompt per line
-  negative_prompts_path: data/prompts/neg.txt
+  neg_capture_path: data/eval/mmlu_general.csv  # neg DIM capture + few-shots source
+  split:                                        # random split (omit to use legacy positional mode)
+    steering: 20                                # % of eval CSV → positive DIM capture
+    validation: 20                              # % → validation (scored, 'split'='validation' in output)
+    test: 60                                    # % → held-out test ('split'='test' in output)
+  # positive_prompts_path / negative_prompts_path — only for text-file mode (no neg_capture_path)
 
 sweep:
+  seed: 42                      # controls random split, MCF choice shuffling, example sampling
   formulation: both             # mcf | cf | both
   layers: null                  # null = all layers, or e.g. [10, 15, 20, 25]
   coef_list: [-20, -10, -5, 5, 10, 20]
@@ -31,9 +36,10 @@ output:
   base_dir: results/
 
 wandb:
-  enabled: false                # set true to log this run to W&B
-  project: steering-vectors     # W&B project name
-  entity: null                  # null = use default account; otherwise team/user
-  tags: []                      # e.g. [llama3, anatomy]
-  notes: ""                     # free-text run description
-  mode: online                  # online | offline | disabled
+  enabled: false                    # set true to log this run to W&B
+  project: steering-vectors         # W&B project name
+  entity: steering-team             # W&B team name; null = personal account
+  tags: []                          # e.g. [llama3, anatomy]
+  notes: ""                         # free-text run description
+  mode: online                      # online | offline | disabled
+  best_coef_criterion: val_acc      # val_acc | val_delta

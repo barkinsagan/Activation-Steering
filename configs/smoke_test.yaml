@@ -1,23 +1,44 @@
-base: configs/exp_20260328_anatomy_llama38b_mcq_sweep.yaml
-
 experiment_id: smoke_test
 
 model:
-  name: meta-llama/Meta-Llama-3.1-8B
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: float16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/gpqa_main_all_sweep.csv
+  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
+  split:
+    steering: 20
+    validation: 20
+    test: 60
 
 sweep:
   formulation: both
-  layers: [10, 15, 20]         # 3 layers instead of all 32
-  coef_list: [5]               # baseline (0) is added automatically
-  num_shots: 0
-  fewshot_source: ""
+  layers: [10, 15, 20]          # 3 layers — enough to see curves, fast to run
+  coef_list: [-5, 5]            # baseline (0) added automatically → 3 coefs total
+  token_position: last
+  normalize_vector: false
+  task_prefix: question
+  cf_normalization: character
+  num_shots: 5
+  shuffle_choices: true
+  seed: 42
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
   verbose_every: 5
-  resume: false                # always re-run clean
-  generate_examples: false     # skip slow generation
+  resume: false                 # always re-run clean for smoke test
+  generate_examples: false      # skip slow generation
+  coef_batch_size: 0
+
+output:
+  base_dir: results/
 
 wandb:
   enabled: true
   project: steering-vectors-test
-  tags: [smoke-test, wandb-integration]
-  notes: "Smoke test — wandb online mode check"
-  mode: online
+  entity: steering-team
+  tags: [smoke-test, split-mode, wandb-final-summary]
+  notes: "Smoke test — validates split pipeline + all 4 W&B summary artifacts"
+  mode: offline                 # writes to ./wandb/ locally — no login needed
+  best_coef_criterion: val_acc
