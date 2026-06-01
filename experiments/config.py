@@ -261,7 +261,7 @@ def _validate(cfg: ExperimentConfig, path: Path):
             errors.append("  split: requires neg_capture_path to be set")
 
     if errors:
-        print(f"\nValidation errors in {path}:")
+        print(f"\nValidation errors in {path}:", file=sys.stderr)
         for e in errors:
-            print(e)
+            print(e, file=sys.stderr)
         sys.exit(1)
