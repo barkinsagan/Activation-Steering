@@ -774,7 +774,8 @@ class _FakeModule(torch.nn.Module):
 
     def forward(self, input_ids, attention_mask=None):
         B, S = input_ids.shape
-        hidden_states = torch.zeros(B, S, self.hidden, dtype=torch.float32)
+        # Use input_ids to produce non-zero, input-dependent hidden states
+        hidden_states = input_ids.float().unsqueeze(-1).expand(B, S, self.hidden) * 0.01
         return self.linear(hidden_states)  # actually calls linear → hook fires
 
 

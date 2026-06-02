@@ -30,6 +30,7 @@ sweep:
   resume: false                 # always re-run clean for smoke test
   generate_examples: false      # skip slow generation
   coef_batch_size: 0
+  capture_batch_size: 4          # small value — exercises batched capture path explicitly
 
 output:
   base_dir: results/
