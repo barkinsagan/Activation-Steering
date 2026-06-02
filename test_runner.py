@@ -656,6 +656,219 @@ def _test_log_final_summary_run_none_is_noop():
 
 
 # =============================================================================
+# 8. ModelConfig: load_in_8bit field
+# =============================================================================
+
+def _test_model_config_load_in_8bit_default():
+    from experiments.config import ModelConfig
+    mc = ModelConfig(name="x")
+    assert mc.load_in_8bit is False, f"expected False, got {mc.load_in_8bit}"
+
+
+def _test_model_config_load_in_8bit_true():
+    from experiments.config import ModelConfig
+    mc = ModelConfig(name="x", load_in_8bit=True)
+    assert mc.load_in_8bit is True
+
+
+def _test_load_config_load_in_8bit_parses():
+    from experiments.config import load_config
+    with tempfile.TemporaryDirectory() as tmp:
+        eval_path = _make_eval_csv(Path(tmp))
+        neg_path  = _make_neg_csv(Path(tmp))
+        yaml_text = textwrap.dedent(f"""
+            experiment_id: test_8bit
+            model:
+              name: meta-llama/Meta-Llama-3-70B
+              dtype: bfloat16
+              device: auto
+              load_in_8bit: true
+            dataset:
+              eval_path: {eval_path}
+              neg_capture_path: {neg_path}
+              split:
+                steering: 20
+                validation: 20
+                test: 60
+            sweep:
+              formulation: mcf
+              num_shots: 5
+            output:
+              base_dir: /tmp/
+        """)
+        cfg_path = Path(tmp) / "cfg.yaml"
+        cfg_path.write_text(yaml_text)
+        cfg = load_config(str(cfg_path))
+        assert cfg.model.load_in_8bit is True
+        assert cfg.model.device == "auto"
+
+
+def _test_load_config_load_in_8bit_absent_defaults_false():
+    from experiments.config import load_config
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = _make_config_yaml(Path(tmp))
+        cfg = load_config(cfg_path)
+        assert cfg.model.load_in_8bit is False
+
+
+# =============================================================================
+# 9. SweepConfig: capture_batch_size field
+# =============================================================================
+
+def _test_sweep_config_capture_batch_size_default():
+    from experiments.config import SweepConfig
+    s = SweepConfig()
+    assert s.capture_batch_size == 8, f"expected 8, got {s.capture_batch_size}"
+
+
+def _test_load_config_capture_batch_size_parses():
+    from experiments.config import load_config
+    with tempfile.TemporaryDirectory() as tmp:
+        eval_path = _make_eval_csv(Path(tmp))
+        neg_path  = _make_neg_csv(Path(tmp))
+        yaml_text = textwrap.dedent(f"""
+            experiment_id: test_capbatch
+            model:
+              name: meta-llama/Meta-Llama-3-8B
+              dtype: float16
+              device: cpu
+            dataset:
+              eval_path: {eval_path}
+              neg_capture_path: {neg_path}
+              split:
+                steering: 20
+                validation: 20
+                test: 60
+            sweep:
+              formulation: mcf
+              num_shots: 5
+              capture_batch_size: 16
+            output:
+              base_dir: /tmp/
+        """)
+        cfg_path = Path(tmp) / "cfg.yaml"
+        cfg_path.write_text(yaml_text)
+        cfg = load_config(str(cfg_path))
+        assert cfg.sweep.capture_batch_size == 16, f"expected 16, got {cfg.sweep.capture_batch_size}"
+
+
+def _test_load_config_capture_batch_size_absent_defaults_8():
+    from experiments.config import load_config
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = _make_config_yaml(Path(tmp))
+        cfg = load_config(cfg_path)
+        assert cfg.sweep.capture_batch_size == 8
+
+
+# =============================================================================
+# 10. Batched capture in DifferenceInMeansSteering (CPU, fake model)
+# =============================================================================
+
+class _FakeModule(torch.nn.Module):
+    """Transformer-like module: returns [batch, seq, hidden] filled with a fixed value."""
+    def __init__(self, hidden=16):
+        super().__init__()
+        self.linear = torch.nn.Linear(hidden, hidden, bias=False)
+        self.hidden = hidden
+
+    def forward(self, input_ids, attention_mask=None):
+        B, S = input_ids.shape
+        return self.linear.weight.new_ones(B, S, self.hidden)
+
+
+def _make_dim_steerer(batch_size=4):
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from hook import ModelWithHooks
+    from dim import DifferenceInMeansSteering
+    from transformers import AutoTokenizer
+
+    hidden = 16
+    model = _FakeModule(hidden=hidden)
+    mwh = ModelWithHooks(model)
+
+    # Minimal tokenizer-like object backed by a real fast tokenizer
+    from transformers import GPT2TokenizerFast
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    steerer = DifferenceInMeansSteering(
+        model_with_hooks=mwh,
+        tokenizer=tokenizer,
+        target_layer="linear",
+        token_position="last",
+        capture_batch_size=batch_size,
+    )
+    return steerer, hidden
+
+
+def _test_batched_capture_produces_correct_count():
+    steerer, _ = _make_dim_steerer(batch_size=3)
+    prompts = [f"prompt number {i}" for i in range(10)]
+    steerer.capture_positive_activations(prompts, max_length=32)
+    assert len(steerer.positive_activations) == 10, \
+        f"expected 10 vectors, got {len(steerer.positive_activations)}"
+
+
+def _test_batched_capture_vector_shape():
+    steerer, hidden = _make_dim_steerer(batch_size=4)
+    prompts = [f"hello world {i}" for i in range(8)]
+    steerer.capture_positive_activations(prompts, max_length=32)
+    for i, vec in enumerate(steerer.positive_activations):
+        assert vec.shape == (hidden,), f"vec {i} shape {vec.shape}, expected ({hidden},)"
+
+
+def _test_batched_capture_batch_size_1_matches_batch_size_n():
+    """Capture with batch_size=1 and batch_size=8 should produce identical vectors."""
+    from hook import ModelWithHooks
+    from dim import DifferenceInMeansSteering
+    from transformers import GPT2TokenizerFast
+
+    hidden = 16
+    torch.manual_seed(0)
+    model = _FakeModule(hidden=hidden)
+
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    prompts = [f"test prompt {i}" for i in range(6)]
+
+    def _run(bs):
+        mwh = ModelWithHooks(model)
+        s = DifferenceInMeansSteering(
+            model_with_hooks=mwh, tokenizer=tokenizer,
+            target_layer="linear", token_position="last",
+            capture_batch_size=bs,
+        )
+        s.capture_positive_activations(prompts, max_length=32)
+        return torch.stack(s.positive_activations)
+
+    vecs_1 = _run(1)
+    vecs_n = _run(8)
+    assert torch.allclose(vecs_1, vecs_n, atol=1e-5), \
+        f"batch_size=1 and batch_size=8 gave different activations"
+
+
+def _test_batched_capture_uneven_last_batch():
+    """10 prompts with batch_size=3 → batches of 3,3,3,1. All 10 should be captured."""
+    steerer, _ = _make_dim_steerer(batch_size=3)
+    prompts = [f"sentence {i}" for i in range(10)]
+    steerer.capture_positive_activations(prompts, max_length=32)
+    assert len(steerer.positive_activations) == 10
+
+
+def _test_batched_capture_steering_vector_computable():
+    steerer, hidden = _make_dim_steerer(batch_size=4)
+    pos = [f"positive example {i}" for i in range(8)]
+    neg = [f"negative example {i}" for i in range(8)]
+    steerer.capture_positive_activations(pos, max_length=32)
+    steerer.capture_negative_activations(neg, max_length=32)
+    vec = steerer.compute_steering_vector(normalize=True, norm_type="unit")
+    assert vec.shape == (hidden,)
+    assert abs(vec.norm().item() - 1.0) < 1e-5, "unit-normalized vector should have norm ≈ 1"
+
+
+# =============================================================================
 # Run all
 # =============================================================================
 
@@ -702,6 +915,21 @@ TESTS = [
     ("wandb: load_cf_results attaches split labels",    _test_load_cf_results_attaches_split),
     ("wandb: load_cf_results no files → None",          _test_load_cf_results_no_files_returns_none),
     ("wandb: log_final_summary run=None is no-op",      _test_log_final_summary_run_none_is_noop),
+    # ModelConfig: load_in_8bit
+    ("ModelConfig: load_in_8bit defaults False",         _test_model_config_load_in_8bit_default),
+    ("ModelConfig: load_in_8bit=True accepted",          _test_model_config_load_in_8bit_true),
+    ("load_config: load_in_8bit parses from YAML",       _test_load_config_load_in_8bit_parses),
+    ("load_config: load_in_8bit absent → False",         _test_load_config_load_in_8bit_absent_defaults_false),
+    # SweepConfig: capture_batch_size
+    ("SweepConfig: capture_batch_size defaults 8",       _test_sweep_config_capture_batch_size_default),
+    ("load_config: capture_batch_size parses from YAML", _test_load_config_capture_batch_size_parses),
+    ("load_config: capture_batch_size absent → 8",       _test_load_config_capture_batch_size_absent_defaults_8),
+    # Batched capture
+    ("batched capture: correct vector count",            _test_batched_capture_produces_correct_count),
+    ("batched capture: vector shape matches hidden dim", _test_batched_capture_vector_shape),
+    ("batched capture: batch=1 matches batch=N",         _test_batched_capture_batch_size_1_matches_batch_size_n),
+    ("batched capture: uneven last batch handled",       _test_batched_capture_uneven_last_batch),
+    ("batched capture: steering vector computable",      _test_batched_capture_steering_vector_computable),
 ]
 
 if __name__ == "__main__":

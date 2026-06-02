@@ -1,0 +1,46 @@
+experiment_id: exp_20260602_gpqa_physics_llama8b
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: bfloat16
+  device: cuda
+
+dataset:
+  eval_path: data/eval/gpqa_main_physics_sweep.csv
+  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
+  split:
+    steering: 20
+    validation: 60
+    test: 20
+
+sweep:
+  formulation: both
+  layers: null                  # all 32 layers
+  coef_range:
+    - [-5,  -2, 1]
+    - [-2,  -1, 1]
+    - [-1,   1, 0.25]
+    - [ 1,   2, 1]
+    - [ 2,   5, 1]
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+  task_prefix: question
+  num_shots: 5
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+  generate_examples: false
+  capture_batch_size: 16        # 8B fits easily — use large batch for GPU utilization
+
+output:
+  base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, gpqa-physics, mcf-cf, normalized-unit, scaling-comparison]
+  notes: "Scaling comparison baseline — Llama 3 8B, GPQA physics, 20/60/20 split"
+  mode: online

@@ -21,6 +21,7 @@ class ModelConfig:
     name: str
     dtype: str = "float16"       # float16 | bfloat16 | float32
     device: str = "cuda"
+    load_in_8bit: bool = False
 
 
 @dataclass
@@ -61,6 +62,7 @@ class SweepConfig:
     verbose_every: int = 20
     resume: bool = True
     coef_batch_size: int = 0        # 0 = all coefs in one batch; set smaller if OOM
+    capture_batch_size: int = 8     # prompts per forward pass during DIM capture; 0 = all at once
     generate_examples: bool = True   # generate qualitative text samples per layer/coef
     n_examples: int = 5              # number of questions to generate per layer/coef
     max_new_tokens: int = 80         # max tokens to generate per example

@@ -176,6 +176,7 @@ def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
             verbose_every=s.verbose_every,
             resume=s.resume,
             coef_batch_size=s.coef_batch_size,
+            capture_batch_size=s.capture_batch_size,
             on_layer_complete=mcf_callback,
         )
 
@@ -208,6 +209,7 @@ def _run_experiment_body(cfg: ExperimentConfig, out_dir, wandb_run):
                 verbose_every=s.verbose_every,
                 resume=s.resume,
                 coef_batch_size=s.coef_batch_size,
+                capture_batch_size=s.capture_batch_size,
                 on_layer_complete=cf_callback,
             )
         else:
@@ -406,6 +408,7 @@ def _generate_examples_sweep(
             tokenizer=tokenizer,
             target_layer=layer_name,
             token_position=s.token_position,
+            capture_batch_size=s.capture_batch_size,
         )
         dim_steerer.capture_positive_activations(positive_prompts)
         dim_steerer.capture_negative_activations(negative_prompts)
@@ -428,7 +431,7 @@ def _generate_examples_sweep(
                         return_tensors="pt",
                         truncation=True,
                         max_length=s.max_length,
-                    ).to(model_with_hooks.model.device)
+                    ).to(next(model_with_hooks.model.parameters()).device)
 
                     with torch.no_grad():
                         output_ids = model_with_hooks.model.generate(
@@ -520,6 +523,7 @@ def _run_cf_target_only(model, tokenizer, eval_df, pos_prompts,
             tokenizer=tokenizer,
             target_layer=layer_name,
             token_position=s.token_position,
+            capture_batch_size=s.capture_batch_size,
         )
         dim_steerer.capture_positive_activations(pos_prompts)
         dim_steerer.capture_negative_activations(neg_prompts)

@@ -923,6 +923,7 @@ def sweep_layers_cf(
     resume: bool = True,
     start_layer: Optional[int] = None,
     coef_batch_size: int = 0,
+    capture_batch_size: int = 8,
     on_layer_complete: Optional[Callable[[int, pd.DataFrame], None]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1014,6 +1015,7 @@ def sweep_layers_cf(
             tokenizer=tokenizer,
             target_layer=layer_name,
             token_position=token_position,
+            capture_batch_size=capture_batch_size,
         )
 
         # Capture activations and compute steering vector

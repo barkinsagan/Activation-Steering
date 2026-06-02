@@ -27,17 +27,21 @@ def load_model(cfg: ExperimentConfig):
     }
     dtype = dtype_map[cfg.model.dtype]
 
-    print(f"Loading model: {cfg.model.name}  (dtype={cfg.model.dtype}, device={cfg.model.device})")
+    quant_suffix = " 8-bit" if cfg.model.load_in_8bit else ""
+    print(f"Loading model: {cfg.model.name}  (dtype={cfg.model.dtype}{quant_suffix}, device={cfg.model.device})")
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model.name,
-        torch_dtype=dtype,
-        device_map=cfg.model.device,
-    )
+    load_kwargs = {"device_map": cfg.model.device}
+    if cfg.model.load_in_8bit:
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+    else:
+        load_kwargs["torch_dtype"] = dtype
+
+    model = AutoModelForCausalLM.from_pretrained(cfg.model.name, **load_kwargs)
     model.eval()
 
     print(f"Model loaded. Layers: {model.config.num_hidden_layers}")

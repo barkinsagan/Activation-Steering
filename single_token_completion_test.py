@@ -446,8 +446,9 @@ def sweep_layers_mcf(
     verbose_every:      int = 20,
     resume:             bool = True,
     start_layer:        Optional[int] = None,
-    coef_batch_size:    int = 0,
-    on_layer_complete:  Optional[Callable[[int, pd.DataFrame], None]] = None,
+    coef_batch_size:     int = 0,
+    capture_batch_size:  int = 8,
+    on_layer_complete:   Optional[Callable[[int, pd.DataFrame], None]] = None,
 ) -> Dict[str, Any]:
     """
     Sweep steering vectors across layers, logging single-token metrics.
@@ -533,6 +534,7 @@ def sweep_layers_mcf(
             tokenizer=tokenizer,
             target_layer=layer_name,
             token_position=token_position,
+            capture_batch_size=capture_batch_size,
         )
 
         print(f"\nCapturing activations for layer {layer_idx}...")

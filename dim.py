@@ -18,7 +18,8 @@ class DifferenceInMeansSteering:
                  tokenizer,
                  target_layer: str,
                  token_position: str = "last",
-                 seed: int = 42):
+                 seed: int = 42,
+                 capture_batch_size: int = 8):
         """
         Args:
             model_with_hooks: ModelWithHooks instance
@@ -32,6 +33,7 @@ class DifferenceInMeansSteering:
         self.target_layer = target_layer
         self.token_position = token_position
         self.seed = seed
+        self.capture_batch_size = capture_batch_size
 
         # Storage: List of tensors of shape [hidden_size]
         self.positive_activations: List[torch.Tensor] = []
@@ -116,48 +118,43 @@ class DifferenceInMeansSteering:
         # Select storage list (Pointer reference)
         storage = self.positive_activations if is_positive else self.negative_activations
 
-        with torch.no_grad(): # Disable gradients to save memory
-            for i, prompt in enumerate(prompts):
-                # Tokenize with consistent padding
+        first_device = next(self.model_with_hooks.model.parameters()).device
+        batch_size = self.capture_batch_size if self.capture_batch_size > 0 else len(prompts)
+
+        with torch.no_grad():
+            for batch_start in range(0, len(prompts), batch_size):
+                batch = prompts[batch_start:batch_start + batch_size]
+
                 inputs = self.tokenizer(
-                    prompt,
+                    batch,
                     return_tensors="pt",
                     max_length=max_length,
                     truncation=True,
-                    padding='max_length'  # ← CHANGED: consistent padding
+                    padding=True,
                 )
 
-                input_ids = inputs['input_ids'].to(self.model_with_hooks.model.device)
-                attention_mask = inputs['attention_mask'].to(self.model_with_hooks.model.device)
+                input_ids = inputs['input_ids'].to(first_device)
+                attention_mask = inputs['attention_mask'].to(first_device)
 
-                # Clear previous hooks data
                 self.model_with_hooks.clear_activations()
+                _ = self.model_with_hooks(input_ids, attention_mask=attention_mask)
 
-                # Forward pass (triggers hooks)
-                _ = self.model_with_hooks(input_ids)
-
-                # Retrieve raw activations
                 raw_acts_list = self.model_with_hooks.get_activations(self.target_layer)
 
                 if not raw_acts_list:
-                    print(f"⚠️ Warning: No activations found for prompt {i}")
+                    print(f"⚠️ Warning: No activations found for batch starting at {batch_start}")
                     continue
 
-                # Take the first element (batch)
                 raw_act_tensor = raw_acts_list[0]
-
-                # Process (Handle padding/masking)
                 processed_acts = self._process_batch_activations(raw_act_tensor, attention_mask)
-
-                # Move to CPU immediately
                 processed_acts = processed_acts.detach().cpu()
 
-                # Append individual vectors to storage
                 for vec in processed_acts:
                     storage.append(vec)
 
-                if (i + 1) % 20 == 0:
-                    print(f"  ✓ Processed {i + 1}/{len(prompts)} {dataset_type} prompts")
+                n_done = min(batch_start + batch_size, len(prompts))
+                if n_done % 20 == 0 or n_done == len(prompts):
+                    print(f"  ✓ Processed {n_done}/{len(prompts)} {dataset_type} prompts")
 
         self.model_with_hooks.hook_manager.disable()
         print(f"✅ Captured {len(storage)} {dataset_type} vectors")
