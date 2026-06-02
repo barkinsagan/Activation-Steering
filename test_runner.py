@@ -766,7 +766,7 @@ def _test_load_config_capture_batch_size_absent_defaults_8():
 # =============================================================================
 
 class _FakeModule(torch.nn.Module):
-    """Transformer-like module: returns [batch, seq, hidden] filled with a fixed value."""
+    """Transformer-like module: passes dummy hidden states through self.linear to trigger its hook."""
     def __init__(self, hidden=16):
         super().__init__()
         self.linear = torch.nn.Linear(hidden, hidden, bias=False)
@@ -774,7 +774,8 @@ class _FakeModule(torch.nn.Module):
 
     def forward(self, input_ids, attention_mask=None):
         B, S = input_ids.shape
-        return self.linear.weight.new_ones(B, S, self.hidden)
+        hidden_states = torch.zeros(B, S, self.hidden, dtype=torch.float32)
+        return self.linear(hidden_states)  # actually calls linear → hook fires
 
 
 def _make_dim_steerer(batch_size=4):
