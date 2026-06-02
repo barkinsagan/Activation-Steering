@@ -799,7 +799,7 @@ def _make_dim_steerer(batch_size=4):
         model_with_hooks=mwh,
         tokenizer=tokenizer,
         target_layer="linear",
-        token_position="last",
+        token_position="mean",
         capture_batch_size=batch_size,
     )
     return steerer, hidden
