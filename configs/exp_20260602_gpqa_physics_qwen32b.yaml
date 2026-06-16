@@ -33,6 +33,7 @@ sweep:
   resume: true
   verbose_every: 10
   generate_examples: false
+  coef_batch_size: 2            # 32B on multi-GPU — score 2 coefs at a time to avoid OOM
   capture_batch_size: 8         # 32B across 2 GPUs — conservative to avoid OOM
 
 output:

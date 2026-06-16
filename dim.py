@@ -110,7 +110,8 @@ class DifferenceInMeansSteering:
         self._set_seed()
         self.model_with_hooks.model.eval()  # ← CRITICAL FIX
 
-        # 1. Setup Model
+        # 1. Setup Model — remove any prior hooks first to avoid double-registration
+        self.model_with_hooks.hook_manager.remove_hooks()
         self.model_with_hooks.register_hooks_on_layers([self.target_layer])
         self.model_with_hooks.reset_steering()
         self.model_with_hooks.hook_manager.enable()

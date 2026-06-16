@@ -35,7 +35,7 @@ sweep:
   verbose_every: 10
   generate_examples: false
   capture_batch_size: 4         # 70B 8-bit is memory-heavy — keep small
-  coef_batch_size: 4            # same reason
+  coef_batch_size: 2            # same reason
 
 output:
   base_dir: results/

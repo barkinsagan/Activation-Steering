@@ -121,15 +121,14 @@ class ModelWithHooks:
                     output = modified_tensor
 
             # --- B. CAPTURE LOGIC (Read) ---
-            # We capture *after* steering to see the modified state
+            # We capture *after* steering to see the modified state.
+            # Transformer blocks return a tuple (hidden_states, ...); we only
+            # need the hidden states tensor (first element).
             if self.hook_manager.enabled:
                 if isinstance(output, torch.Tensor):
                     self.hook_manager.activations[layer_name].append(output.detach().cpu())
-                elif isinstance(output, tuple):
-                    # Recursively detach elements
-                    self.hook_manager.activations[layer_name].append(
-                        tuple(o.detach().cpu() if isinstance(o, torch.Tensor) else o for o in output)
-                    )
+                elif isinstance(output, tuple) and output and isinstance(output[0], torch.Tensor):
+                    self.hook_manager.activations[layer_name].append(output[0].detach().cpu())
             
             # --- C. RETURN ---
             # Crucial: Must return the modified output for steering to take effect
