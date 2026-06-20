@@ -41,6 +41,12 @@ def init_run(cfg) -> Optional[Any]:
         config=dataclasses.asdict(cfg),
         reinit=True,
     )
+    # Give each formulation prefix its own x-axis so MCF and CF layers don't
+    # collide on the shared global step counter.
+    run.define_metric("mcf/layer")
+    run.define_metric("mcf/*", step_metric="mcf/layer")
+    run.define_metric("cf/layer")
+    run.define_metric("cf/*", step_metric="cf/layer")
     print(f"[wandb] run initialised: {run.url if hasattr(run, 'url') else run.id}")
     return run
 
@@ -51,17 +57,19 @@ def finish_run(run) -> None:
     run.finish()
 
 
+_SKIP_COLS = {"layer", "coef", "n", "n_questions"}
+
 def make_layer_callback(run, prefix: str, summarize_fn) -> Optional[Callable]:
-    """Build an `on_layer_complete(layer_idx, layer_df)` callback that logs
-    per-(layer, coef) summary metrics under `<prefix>/<metric>` keys.
+    """Build an `on_layer_complete(layer_idx, layer_df)` callback.
 
-    `summarize_fn(layer_df) -> pd.DataFrame` aggregates raw per-question records
-    into one row per (layer, coef). Pass the existing _compute_summary functions.
-
-    Returns None if `run` is None, so the runner can pass it unconditionally.
+    After each layer, re-logs one `wandb.plot.line` chart per metric:
+      x=layer, y=metric, one line per coef.
+    This gives ~10-15 panels total instead of one panel per (coef, metric).
     """
     if run is None:
         return None
+
+    accumulated: list = []
 
     def _callback(layer_idx: int, layer_df: pd.DataFrame) -> None:
         try:
@@ -69,7 +77,29 @@ def make_layer_callback(run, prefix: str, summarize_fn) -> Optional[Callable]:
         except Exception as e:
             print(f"[wandb] failed to summarise layer {layer_idx}: {e}")
             return
-        _log_summary_rows(run, summary, prefix=prefix, step=layer_idx)
+
+        summary = summary.copy()
+        if "layer" not in summary.columns:
+            summary["layer"] = layer_idx
+
+        accumulated.append(summary)
+        combined = pd.concat(accumulated, ignore_index=True)
+        combined["coef"] = combined["coef"].apply(lambda c: f"{float(c):+g}")
+
+        metrics = [c for c in combined.columns if c not in _SKIP_COLS]
+        charts: Dict[str, Any] = {}
+        for metric in metrics:
+            col_data = combined[["layer", "coef", metric]].dropna()
+            if col_data.empty:
+                continue
+            table = wandb.Table(dataframe=col_data.round(4))
+            charts[f"{prefix}/{metric}"] = wandb.plot.line(
+                table, x="layer", y=metric, stroke="coef",
+                title=f"{prefix.upper()} — {metric}",
+            )
+
+        if charts:
+            run.log(charts)
 
     return _callback
 
@@ -99,11 +129,9 @@ def log_artifact(run, path: Path, name: str, artifact_type: str = "results") -> 
 # =============================================================================
 
 def _log_summary_rows(run, summary_df: pd.DataFrame, prefix: str, step: int) -> None:
-    """Log each (layer, coef) row as a single wandb step. We pack all coefs for
-    a layer into one log call keyed by `<prefix>/coef_<coef>/<metric>`, plus a
-    flat table for sweep-wide queries."""
+    """Log each (layer, coef) row as a single wandb step.
+    Packs all coefs for a layer into one log call keyed by `<prefix>/coef_<coef>/<metric>`."""
     payload: Dict[str, Any] = {}
-    table_rows = []
 
     for _, row in summary_df.iterrows():
         coef = float(row["coef"])
@@ -114,16 +142,10 @@ def _log_summary_rows(run, summary_df: pd.DataFrame, prefix: str, step: int) -> 
             if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
                 continue
             payload[f"{prefix}/{coef_key}/{col}"] = val
-        table_rows.append({k: (float(v) if isinstance(v, (int, float)) else v)
-                           for k, v in row.items()})
-
-    if table_rows:
-        cols = list(table_rows[0].keys())
-        table = wandb.Table(columns=cols, data=[[r[c] for c in cols] for r in table_rows])
-        payload[f"{prefix}/layer_table"] = table
 
     if payload:
-        run.log(payload, step=step)
+        payload[f"{prefix}/layer"] = step
+        run.log(payload)
 
 
 # =============================================================================
@@ -141,6 +163,12 @@ _CF_DELTA_COL: Dict[str, str] = {
     "token":     "delta_target_sum_lp",
     "character": "delta_target_char_norm_lp",
     "pmi":       "delta_target_sum_lp",
+}
+_CF_LOGPROB_COL: Dict[str, str] = {
+    "none":      "target_sum_lp",
+    "token":     "target_mean_lp",
+    "character": "target_char_norm_lp",
+    "pmi":       "target_sum_lp",
 }
 
 
@@ -175,6 +203,7 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 results_df=mcf_df,
                 prefix="mcf",
                 acc_col="correct",
+                logprob_col="correct_label_logprob",
                 delta_col="delta_correct_logprob",
                 criterion=cfg.wandb.best_coef_criterion,
                 split_table=split_table,
@@ -190,6 +219,7 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 results_df=cf_df,
                 prefix="cf",
                 acc_col=_CF_CORRECT_COL.get(norm, "correct_char"),
+                logprob_col=_CF_LOGPROB_COL.get(norm, "target_char_norm_lp"),
                 delta_col=_CF_DELTA_COL.get(norm, "delta_target_char_norm_lp"),
                 criterion=cfg.wandb.best_coef_criterion,
                 split_table=split_table,
@@ -202,58 +232,64 @@ def _log_formulation_artifacts(
     results_df: pd.DataFrame,
     prefix: str,
     acc_col: str,
+    logprob_col: str,
     delta_col: str,
     criterion: str,
     split_table,
     has_split: bool,
 ) -> None:
-    if split_table is not None:
-        try:
-            run.log({f"{prefix}/split_info": split_table})
-        except Exception as e:
-            print(f"[wandb] split_info log failed ({prefix}): {e}")
-
-    if not has_split or "split" not in results_df.columns:
-        return
-
-    val_df  = results_df[results_df["split"] == "validation"]
-    test_df = results_df[results_df["split"] == "test"]
-    if val_df.empty or test_df.empty:
-        return
-
-    val_sum  = _compute_split_summary(val_df,  acc_col, delta_col)
-    test_sum = _compute_split_summary(test_df, acc_col, delta_col)
-    if val_sum.empty or test_sum.empty:
-        return
-
-    best_coef_df = _select_best_coef(val_sum, criterion)
-
     try:
-        tbl = _build_layer_summary_table(val_sum, test_sum, best_coef_df)
+        tbl = _build_layer_coef_table(results_df, acc_col, logprob_col, delta_col)
         if tbl is not None:
-            run.log({f"{prefix}/layer_summary": tbl})
+            run.log({f"{prefix}/layer_coef_table": tbl})
     except Exception as e:
-        print(f"[wandb] layer_summary log failed ({prefix}): {e}")
+        print(f"[wandb] layer_coef_table log failed ({prefix}): {e}")
+
+    # Item 2 — acc by coef (val + test) and delta_logprob by coef (val only)
+    try:
+        charts = _build_metric_by_coef_charts(
+            results_df, acc_col, "acc", prefix,
+            splits=[("validation", "Validation"), ("test", "Test")],
+        )
+        if charts:
+            run.log(charts)
+    except Exception as e:
+        print(f"[wandb] acc_by_coef charts failed ({prefix}): {e}")
 
     try:
-        curves_tbl = _build_validation_curves_table(val_sum, test_sum)
-        if curves_tbl is not None:
-            run.log({f"{prefix}/validation_curves": curves_tbl})
+        charts = _build_metric_by_coef_charts(
+            results_df[results_df["coef"] != 0.0] if "coef" in results_df.columns else results_df,
+            delta_col, "delta_logprob", prefix,
+            splits=[("validation", "Validation")],
+        )
+        if charts:
+            run.log(charts)
     except Exception as e:
-        print(f"[wandb] validation_curves log failed ({prefix}): {e}")
+        print(f"[wandb] delta_logprob_by_coef chart failed ({prefix}): {e}")
 
+    # Item 3 — grouped layers (every 10)
     try:
-        fig = _build_layer_overview_plot(val_sum, test_sum, best_coef_df, prefix)
-        if fig is not None:
-            run.log({f"{prefix}/layer_overview": wandb.Image(fig)})
+        charts = _build_grouped_layer_charts(results_df, acc_col, delta_col, prefix)
+        if charts:
+            run.log(charts)
     except Exception as e:
-        print(f"[wandb] layer_overview plot failed ({prefix}): {e}")
-    finally:
-        try:
-            import matplotlib.pyplot as _plt
-            _plt.close("all")
-        except Exception:
-            pass
+        print(f"[wandb] grouped_layer charts failed ({prefix}): {e}")
+
+    # Item 4 — best coef per layer table (from validation)
+    try:
+        tbl = _build_best_coef_table(results_df, acc_col, delta_col)
+        if tbl is not None:
+            run.log({f"{prefix}/best_coef_per_layer": tbl})
+    except Exception as e:
+        print(f"[wandb] best_coef_per_layer table failed ({prefix}): {e}")
+
+    # Item 5 — test: baseline vs oracle vs fixed steering
+    try:
+        chart = _build_test_steering_plot(results_df, acc_col, prefix)
+        if chart is not None:
+            run.log({f"{prefix}/test_steering_vs_baseline": chart})
+    except Exception as e:
+        print(f"[wandb] test_steering_vs_baseline plot failed ({prefix}): {e}")
 
 
 def _load_mcf_results(mcf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -329,6 +365,72 @@ def _select_best_coef(val_summary: pd.DataFrame, criterion: str) -> pd.DataFrame
             "val_delta_mean": float(best["delta_mean"]),
         })
     return pd.DataFrame(rows).sort_values("layer").reset_index(drop=True)
+
+
+def _build_layer_coef_table(
+    results_df: pd.DataFrame,
+    acc_col: str,
+    logprob_col: str,
+    delta_logprob_col: str,
+) -> Optional[Any]:
+    """Table: one row per (layer, coef[, split]).
+    Shows baseline acc/logprob alongside steered acc/logprob and their deltas.
+    Baseline values are the coef=0 row for the same (layer, split) group.
+    """
+    if not _WANDB_AVAILABLE or results_df.empty:
+        return None
+
+    has_split = "split" in results_df.columns
+    group_keys = ["layer", "split"] if has_split else ["layer"]
+
+    rows = []
+    for group_vals, grp in results_df.groupby(group_keys):
+        if has_split:
+            layer, split = group_vals
+        else:
+            layer, split = group_vals, None
+
+        base = grp[grp["coef"] == 0.0]
+        base_acc = float(base[acc_col].mean()) if (not base.empty and acc_col in base.columns) else float("nan")
+        base_lp  = float(base[logprob_col].mean()) if (not base.empty and logprob_col in base.columns) else float("nan")
+
+        for coef, coef_grp in grp.groupby("coef"):
+            coef = float(coef)
+            acc  = float(coef_grp[acc_col].mean()) if acc_col in coef_grp.columns else float("nan")
+            lp   = float(coef_grp[logprob_col].mean()) if logprob_col in coef_grp.columns else float("nan")
+
+            if coef == 0.0:
+                acc_delta = 0.0
+                delta_lp  = 0.0
+            else:
+                acc_delta = (acc - base_acc) if not (math.isnan(acc) or math.isnan(base_acc)) else float("nan")
+                delta_lp  = float(coef_grp[delta_logprob_col].mean()) if delta_logprob_col in coef_grp.columns else float("nan")
+
+            row: Dict[str, Any] = {
+                "layer":             int(layer),
+                "coef":              coef,
+                "baseline_acc":      round(base_acc, 4),
+                "acc":               round(acc, 4),
+                "acc_delta":         round(acc_delta, 4) if not math.isnan(acc_delta) else float("nan"),
+                "baseline_logprob":  round(base_lp, 4) if not math.isnan(base_lp) else float("nan"),
+                "logprob":           round(lp, 4) if not math.isnan(lp) else float("nan"),
+                "delta_logprob":     round(delta_lp, 4) if not math.isnan(delta_lp) else float("nan"),
+            }
+            if has_split:
+                row["split"] = split
+            rows.append(row)
+
+    if not rows:
+        return None
+
+    cols = ["layer", "coef"] + (["split"] if has_split else []) + [
+        "baseline_acc", "acc", "acc_delta",
+        "baseline_logprob", "logprob", "delta_logprob",
+    ]
+    return wandb.Table(
+        columns=cols,
+        data=[[r.get(c, float("nan")) for c in cols] for r in rows],
+    )
 
 
 def _build_layer_summary_table(
@@ -449,3 +551,174 @@ def _build_layer_overview_plot(
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     return fig
+
+
+def _build_metric_by_coef_charts(
+    results_df: pd.DataFrame,
+    metric_col: str,
+    y_label: str,
+    prefix: str,
+    splits: Optional[list] = None,
+) -> Dict[str, Any]:
+    """x=coef, y=metric_col, one line per layer (click legend to filter layers).
+    `splits`: list of (split_value, split_label) tuples; auto-detects val/test if None.
+    """
+    out: Dict[str, Any] = {}
+    if not _WANDB_AVAILABLE or results_df.empty or metric_col not in results_df.columns:
+        return out
+
+    if splits is None:
+        has_split = "split" in results_df.columns and {"validation", "test"}.issubset(results_df["split"].unique())
+        splits = [("validation", "Validation"), ("test", "Test")] if has_split else [(None, "All")]
+
+    for split_val, split_label in splits:
+        df = results_df[results_df["split"] == split_val] if split_val else results_df
+        if df.empty:
+            continue
+        summary = (
+            df.groupby(["layer", "coef"])[metric_col]
+            .mean()
+            .reset_index()
+            .rename(columns={metric_col: y_label})
+            .round(4)
+        )
+        summary["layer"] = summary["layer"].astype(str)
+        table = wandb.Table(dataframe=summary)
+        chart = wandb.plot.line(
+            table, x="coef", y=y_label, stroke="layer",
+            title=f"{prefix.upper()} — {y_label} by Coef ({split_label})",
+        )
+        key = f"{prefix}/{y_label}_by_coef_{split_val}" if split_val else f"{prefix}/{y_label}_by_coef"
+        out[key] = chart
+
+    return out
+
+
+def _build_grouped_layer_charts(
+    results_df: pd.DataFrame,
+    acc_col: str,
+    delta_col: str,
+    prefix: str,
+    group_size: int = 10,
+) -> Dict[str, Any]:
+    """x=coef, one line per layer-group (e.g. L0-9, L10-19 …), showing mean acc and mean delta_logprob.
+    Logged for validation split only (or all data if no split).
+    """
+    out: Dict[str, Any] = {}
+    if not _WANDB_AVAILABLE or results_df.empty:
+        return out
+
+    df = results_df[results_df["split"] == "validation"] if "split" in results_df.columns else results_df
+    if df.empty:
+        return out
+
+    df = df.copy()
+    base = (df["layer"] // group_size) * group_size
+    df["layer_group"] = base.apply(lambda x: f"L{int(x)}-{int(x) + group_size - 1}")
+
+    for metric_col, y_label in [(acc_col, "acc"), (delta_col, "delta_logprob")]:
+        if metric_col not in df.columns:
+            continue
+        src = df if y_label == "acc" else df[df["coef"] != 0.0]
+        summary = (
+            src.groupby(["layer_group", "coef"])[metric_col]
+            .mean()
+            .reset_index()
+            .rename(columns={metric_col: y_label})
+            .round(4)
+        )
+        table = wandb.Table(dataframe=summary)
+        chart = wandb.plot.line(
+            table, x="coef", y=y_label, stroke="layer_group",
+            title=f"{prefix.upper()} — {y_label} by Coef, Grouped Layers (Validation)",
+        )
+        out[f"{prefix}/grouped_{y_label}_by_coef"] = chart
+
+    return out
+
+
+def _build_best_coef_table(
+    results_df: pd.DataFrame,
+    acc_col: str,
+    delta_col: str,
+) -> Optional[Any]:
+    """Table: for each layer, which coef gave highest validation acc, and its val_acc + val_delta_logprob."""
+    if not _WANDB_AVAILABLE or results_df.empty or acc_col not in results_df.columns:
+        return None
+
+    df = results_df[results_df["split"] == "validation"] if "split" in results_df.columns else results_df
+    non_base = df[df["coef"] != 0.0]
+    if non_base.empty:
+        return None
+
+    agg_cols = {acc_col: "mean"}
+    if delta_col in non_base.columns:
+        agg_cols[delta_col] = "mean"
+
+    per_layer_coef = non_base.groupby(["layer", "coef"]).agg(agg_cols).reset_index()
+    best_idx = per_layer_coef.groupby("layer")[acc_col].idxmax()
+    best = per_layer_coef.loc[best_idx].sort_values("layer").reset_index(drop=True)
+
+    cols = ["layer", "coef", acc_col] + ([delta_col] if delta_col in best.columns else [])
+    rename = {acc_col: "val_acc", delta_col: "val_delta_logprob"}
+    best = best[cols].rename(columns=rename).round(4)
+
+    return wandb.Table(dataframe=best)
+
+
+def _build_test_steering_plot(
+    results_df: pd.DataFrame,
+    acc_col: str,
+    prefix: str,
+) -> Optional[Any]:
+    """x=layer, y=test_acc, 3 lines:
+      - baseline (coef=0 on test)
+      - oracle   (best val coef per layer, evaluated on test)
+      - fixed    (single globally-best val coef, evaluated on test)
+    """
+    if not _WANDB_AVAILABLE or results_df.empty or "split" not in results_df.columns:
+        return None
+    if acc_col not in results_df.columns:
+        return None
+
+    val_df  = results_df[results_df["split"] == "validation"]
+    test_df = results_df[results_df["split"] == "test"]
+    if val_df.empty or test_df.empty:
+        return None
+
+    # Select best coef per layer from validation
+    val_non_base = val_df[val_df["coef"] != 0.0]
+    if val_non_base.empty:
+        return None
+    val_per = val_non_base.groupby(["layer", "coef"])[acc_col].mean().reset_index()
+    oracle_map = (
+        val_per.loc[val_per.groupby("layer")[acc_col].idxmax()]
+        .set_index("layer")["coef"]
+        .astype(float)
+        .to_dict()
+    )
+    global_best = float(val_per.groupby("coef")[acc_col].mean().idxmax())
+
+    test_per = test_df.groupby(["layer", "coef"])[acc_col].mean().reset_index()
+
+    def _acc(layer, coef):
+        row = test_per[(test_per["layer"] == layer) & (test_per["coef"] == coef)]
+        return round(float(row[acc_col].values[0]), 4) if len(row) else float("nan")
+
+    layers = sorted(test_df["layer"].unique().tolist())
+    rows = []
+    for layer in layers:
+        layer = int(layer)
+        rows.append({"layer": layer, "acc": _acc(layer, 0.0),           "line": "baseline (coef=0)"})
+        rows.append({"layer": layer, "acc": _acc(layer, oracle_map.get(layer, global_best)), "line": "oracle (best val coef/layer)"})
+        rows.append({"layer": layer, "acc": _acc(layer, global_best),   "line": f"fixed best (coef={global_best:+g})"})
+
+    df = pd.DataFrame(rows).dropna(subset=["acc"])
+    if df.empty:
+        return None
+
+    table = wandb.Table(dataframe=df)
+    return wandb.plot.line(
+        table, x="layer", y="acc", stroke="line",
+        title=f"{prefix.upper()} — Test: Baseline vs Steering",
+    )
