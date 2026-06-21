@@ -224,8 +224,9 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
 
     cf_dir = out_dir / "cf"
     if cf_dir.exists():
-        all_cf_files = list(cf_dir.rglob("*"))
-        print(f"[wandb] cf dir contents ({len(all_cf_files)} files): {[str(f.relative_to(cf_dir)) for f in all_cf_files[:20]]}")
+        subdirs = sorted([d for d in cf_dir.iterdir() if d.is_dir()])[:3]
+        for sd in subdirs:
+            print(f"[wandb] {sd.name}/: {[f.name for f in sd.iterdir()]}")
     else:
         print(f"[wandb] cf dir does not exist: {cf_dir}")
     print(f"[wandb] cf_results_exist={cf_results_exist}, formulation={s.formulation}")
