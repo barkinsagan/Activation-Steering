@@ -83,15 +83,22 @@ def load_mcf(exp_root: Path) -> pd.DataFrame:
 
 
 def load_cf_wide(exp_root: Path) -> pd.DataFrame:
-    """Load all CF per-question data from per-layer CSVs."""
+    """Load all CF per-question data from per-layer subdirectories."""
     dfs = []
-    for f in sorted(glob.glob(str(exp_root / "cf" / "layer_*_results.csv"))):
-        layer = int(Path(f).stem.split("layer_")[1].split("_")[0])
-        df = pd.read_csv(f)
-        df["layer"] = layer
+    layer_dirs = sorted(
+        [d for d in (exp_root / "cf").iterdir() if d.is_dir() and d.name.startswith("layer_")],
+        key=lambda d: int(d.name.split("_")[1]),
+    )
+    for d in layer_dirs:
+        wide = d / "detailed_wide.csv"
+        if not wide.exists():
+            warnings.warn(f"Missing detailed_wide.csv for CF {d.name} — skipping")
+            continue
+        df = pd.read_csv(wide)
+        df["layer"] = int(d.name.split("_")[1])
         dfs.append(df)
     if not dfs:
-        raise FileNotFoundError(f"No CF layer files in {exp_root / 'cf'}")
+        raise FileNotFoundError(f"No CF layer dirs in {exp_root / 'cf'}")
     return pd.concat(dfs, ignore_index=True)
 
 

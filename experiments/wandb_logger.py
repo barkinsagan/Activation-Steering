@@ -203,7 +203,7 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
     s = cfg.sweep
     out_dir = _Path(out_dir)
     has_split = "split" in eval_df.columns
-    cf_results_exist = any((out_dir / "cf").glob("layer_*_results.csv"))
+    cf_results_exist = any((out_dir / "cf").glob("layer_*/detailed_wide.csv"))
 
     split_table = _build_split_info_table(cfg, eval_df)
 
@@ -222,18 +222,9 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 has_split=has_split,
             )
 
-    cf_dir = out_dir / "cf"
-    if cf_dir.exists():
-        subdirs = sorted([d for d in cf_dir.iterdir() if d.is_dir()])[:3]
-        for sd in subdirs:
-            print(f"[wandb] {sd.name}/: {[f.name for f in sd.iterdir()]}")
-    else:
-        print(f"[wandb] cf dir does not exist: {cf_dir}")
-    print(f"[wandb] cf_results_exist={cf_results_exist}, formulation={s.formulation}")
     if s.formulation in ("cf", "both") and cf_results_exist:
         norm = s.cf_normalization
         cf_df = _load_cf_results(out_dir / "cf", eval_df)
-        print(f"[wandb] cf_df: {len(cf_df) if cf_df is not None else None} rows, split col={'split' in cf_df.columns if cf_df is not None else 'N/A'}")
         if cf_df is not None:
             _log_formulation_artifacts(
                 run=run,
@@ -261,10 +252,7 @@ def _log_formulation_artifacts(
     has_split: bool,
 ) -> None:
     try:
-        print(f"[wandb] {prefix}: {len(results_df)} rows, columns: {list(results_df.columns)}")
-        print(f"[wandb] {prefix}: split values = {results_df['split'].unique().tolist() if 'split' in results_df.columns else 'NO SPLIT COLUMN'}")
         charts = _build_oracle_charts(results_df, acc_col, prefix)
-        print(f"[wandb] {prefix}: oracle charts generated = {list(charts.keys())}")
         if charts:
             run.log(charts)
     except Exception as e:
@@ -444,10 +432,19 @@ def _load_mcf_results(mcf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 
 def _load_cf_results(cf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    paths = sorted(Path(cf_dir).glob("layer_*_results.csv"))
-    if not paths:
+    frames = []
+    for layer_dir in sorted(Path(cf_dir).glob("layer_*"), key=lambda d: int(d.name.split("_")[1])):
+        if not layer_dir.is_dir():
+            continue
+        wide_path = layer_dir / "detailed_wide.csv"
+        if not wide_path.exists():
+            continue
+        frame = pd.read_csv(wide_path)
+        frame["layer"] = int(layer_dir.name.split("_")[1])
+        frames.append(frame)
+    if not frames:
         return None
-    df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    df = pd.concat(frames, ignore_index=True)
     return _apply_split(df, eval_df, Path(cf_dir).parent)
 
 
