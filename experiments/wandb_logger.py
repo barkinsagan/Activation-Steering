@@ -203,7 +203,7 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
     s = cfg.sweep
     out_dir = _Path(out_dir)
     has_split = "split" in eval_df.columns
-    has_false = any(c in eval_df.columns for c in ("false1", "false2", "false3"))
+    cf_results_exist = any((out_dir / "cf").glob("layer_*_results.csv"))
 
     split_table = _build_split_info_table(cfg, eval_df)
 
@@ -222,7 +222,7 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 has_split=has_split,
             )
 
-    if s.formulation in ("cf", "both") and has_false:
+    if s.formulation in ("cf", "both") and cf_results_exist:
         norm = s.cf_normalization
         cf_df = _load_cf_results(out_dir / "cf", eval_df)
         if cf_df is not None:
