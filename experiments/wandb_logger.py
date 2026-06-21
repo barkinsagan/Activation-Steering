@@ -260,57 +260,148 @@ def _log_formulation_artifacts(
     has_split: bool,
 ) -> None:
     try:
-        tbl = _build_layer_coef_table(results_df, acc_col, logprob_col, delta_col)
-        if tbl is not None:
-            run.log({f"{prefix}/layer_coef_table": tbl})
-    except Exception as e:
-        print(f"[wandb] layer_coef_table log failed ({prefix}): {e}")
-
-    # Item 2 — acc by coef (val + test) and delta_logprob by coef (val only)
-    try:
-        charts = _build_metric_by_coef_charts(
-            results_df, acc_col, "acc", prefix,
-            splits=[("validation", "Validation"), ("test", "Test")],
-        )
+        charts = _build_oracle_charts(results_df, acc_col, prefix)
         if charts:
             run.log(charts)
     except Exception as e:
-        print(f"[wandb] acc_by_coef charts failed ({prefix}): {e}")
+        print(f"[wandb] oracle charts failed ({prefix}): {e}")
 
-    try:
-        charts = _build_metric_by_coef_charts(
-            results_df[results_df["coef"] != 0.0] if "coef" in results_df.columns else results_df,
-            delta_col, "delta_logprob", prefix,
-            splits=[("validation", "Validation")],
-        )
-        if charts:
-            run.log(charts)
-    except Exception as e:
-        print(f"[wandb] delta_logprob_by_coef chart failed ({prefix}): {e}")
 
-    # Item 3 — grouped layers (every 10)
-    try:
-        charts = _build_grouped_layer_charts(results_df, acc_col, delta_col, prefix)
-        if charts:
-            run.log(charts)
-    except Exception as e:
-        print(f"[wandb] grouped_layer charts failed ({prefix}): {e}")
+def _build_oracle_charts(
+    results_df: pd.DataFrame,
+    acc_col: str,
+    prefix: str,
+) -> Dict[str, Any]:
+    """Two charts per formulation:
+      1. best_coef_per_layer  — x=layer, y=best coef from validation (bar, red=pos/blue=neg)
+      2. test_oracle_gain     — x=layer, y=test_acc(oracle coef) − test_baseline
+    """
+    import matplotlib.pyplot as plt
 
-    # Item 4 — best coef per layer table (from validation)
-    try:
-        tbl = _build_best_coef_table(results_df, acc_col, delta_col)
-        if tbl is not None:
-            run.log({f"{prefix}/best_coef_per_layer": tbl})
-    except Exception as e:
-        print(f"[wandb] best_coef_per_layer table failed ({prefix}): {e}")
+    out: Dict[str, Any] = {}
+    if not _WANDB_AVAILABLE or results_df.empty or "split" not in results_df.columns:
+        return out
+    if acc_col not in results_df.columns:
+        return out
 
-    # Item 5 — test: baseline vs oracle vs fixed steering
-    try:
-        chart = _build_test_steering_plot(results_df, acc_col, prefix)
-        if chart is not None:
-            run.log({f"{prefix}/test_steering_vs_baseline": chart})
-    except Exception as e:
-        print(f"[wandb] test_steering_vs_baseline plot failed ({prefix}): {e}")
+    val_df  = results_df[results_df["split"] == "validation"]
+    test_df = results_df[results_df["split"] == "test"]
+    if val_df.empty or test_df.empty:
+        return out
+
+    val_non_base = val_df[val_df["coef"] != 0.0]
+    if val_non_base.empty:
+        return out
+
+    val_per = val_non_base.groupby(["layer", "coef"])[acc_col].mean().reset_index()
+    best_rows = val_per.loc[val_per.groupby("layer")[acc_col].idxmax()].copy()
+    best_rows["layer"] = best_rows["layer"].astype(int)
+    best_rows["coef"]  = best_rows["coef"].astype(float)
+    best_rows = best_rows.sort_values("layer")
+
+    layers    = best_rows["layer"].tolist()
+    best_coef = best_rows["coef"].tolist()
+
+    # ── Chart 1: best coef per layer ──────────────────────────────────────────
+    colors = ["tomato" if c > 0 else ("steelblue" if c < 0 else "gray") for c in best_coef]
+    fig1, ax1 = plt.subplots(figsize=(12, 4))
+    ax1.bar(layers, best_coef, color=colors, width=0.8)
+    ax1.axhline(0, color="black", lw=0.8)
+    ax1.set_xlabel("Layer")
+    ax1.set_ylabel("Best Coefficient")
+    ax1.set_title(f"{prefix.upper()} — Best Coefficient per Layer  (selected on Validation)")
+    ax1.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    out[f"{prefix}/best_coef_per_layer"] = wandb.Image(fig1)
+    plt.close(fig1)
+
+    # ── Chart 2: oracle test gain per layer ───────────────────────────────────
+    test_per = test_df.groupby(["layer", "coef"])[acc_col].mean().reset_index()
+    oracle_map = dict(zip(best_rows["layer"], best_rows["coef"]))
+
+    def _get(layer, coef):
+        row = test_per[(test_per["layer"] == layer) & (test_per["coef"] == coef)]
+        return float(row[acc_col].values[0]) if len(row) else float("nan")
+
+    deltas = []
+    for layer in layers:
+        steered  = _get(layer, oracle_map[layer])
+        baseline = _get(layer, 0.0)
+        delta = steered - baseline
+        if math.isnan(steered) or math.isnan(baseline):
+            delta = float("nan")
+        deltas.append(delta)
+
+    valid = [(l, d) for l, d in zip(layers, deltas) if not math.isnan(d)]
+    if not valid:
+        return out
+    vl, vd = zip(*valid)
+
+    fig2, ax2 = plt.subplots(figsize=(12, 4))
+    ax2.plot(vl, vd, color="steelblue", marker="o", markersize=4, lw=2)
+    ax2.axhline(0, color="black", lw=0.8, ls="--")
+    ax2.fill_between(vl, vd, 0, where=[d >= 0 for d in vd], alpha=0.2, color="tomato")
+    ax2.fill_between(vl, vd, 0, where=[d < 0  for d in vd], alpha=0.2, color="steelblue")
+    ax2.set_xlabel("Layer")
+    ax2.set_ylabel("Steered − Baseline Accuracy")
+    ax2.set_title(f"{prefix.upper()} — Test Gain per Layer  (oracle: best-val coef per layer)")
+    ax2.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out[f"{prefix}/test_oracle_gain_per_layer"] = wandb.Image(fig2)
+    plt.close(fig2)
+
+    return out
+
+
+def _log_layer_sweep_charts(
+    run,
+    results_df: pd.DataFrame,
+    prefix: str,
+    acc_col: str,
+    logprob_col: str,
+    delta_col: str,
+) -> None:
+    """Log x=layer charts — one matplotlib image per metric, one colored line per coef.
+    Reproduces what the streaming callback logs during the sweep, but from full results.
+    """
+    import matplotlib.pyplot as plt
+
+    if not _WANDB_AVAILABLE or results_df.empty:
+        return
+
+    metric_cols = [c for c in [acc_col, logprob_col, delta_col]
+                   if c and c in results_df.columns]
+    if not metric_cols:
+        return
+
+    agg = results_df.groupby(["layer", "coef"])[metric_cols].mean().reset_index()
+
+    coef_vals = sorted(agg["coef"].unique(), key=float)
+    abs_max = max(abs(min(coef_vals)), abs(max(coef_vals))) or 1.0
+    norm = plt.Normalize(vmin=-abs_max, vmax=abs_max)
+    cmap = plt.cm.RdBu_r
+
+    charts: Dict[str, Any] = {}
+    for metric in metric_cols:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for coef in coef_vals:
+            grp = agg[agg["coef"] == coef].sort_values("layer")
+            if grp.empty:
+                continue
+            ax.plot(grp["layer"], grp[metric],
+                    color=cmap(norm(float(coef))),
+                    marker="o", markersize=3, lw=1.5, label=f"{float(coef):+g}")
+        ax.set_xlabel("Layer")
+        ax.set_ylabel(metric)
+        ax.set_title(f"{prefix.upper()} — {metric}")
+        ax.legend(title="coef", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=7)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        charts[f"{prefix}/{metric}"] = wandb.Image(fig)
+        plt.close(fig)
+
+    if charts:
+        run.log(charts)
 
 
 def _load_mcf_results(mcf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
