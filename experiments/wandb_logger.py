@@ -62,9 +62,8 @@ _SKIP_COLS = {"layer", "coef", "n", "n_questions"}
 def make_layer_callback(run, prefix: str, summarize_fn) -> Optional[Callable]:
     """Build an `on_layer_complete(layer_idx, layer_df)` callback.
 
-    After each layer, re-logs one `wandb.plot.line` chart per metric:
-      x=layer, y=metric, one line per coef.
-    This gives ~10-15 panels total instead of one panel per (coef, metric).
+    After each layer, re-logs one matplotlib image per metric:
+      x=layer, y=metric, one colored line per coef (diverging colormap: blue=negative, red=positive).
     """
     if run is None:
         return None
@@ -72,6 +71,8 @@ def make_layer_callback(run, prefix: str, summarize_fn) -> Optional[Callable]:
     accumulated: list = []
 
     def _callback(layer_idx: int, layer_df: pd.DataFrame) -> None:
+        import matplotlib.pyplot as plt
+
         try:
             summary = summarize_fn(layer_df)
         except Exception as e:
@@ -86,19 +87,37 @@ def make_layer_callback(run, prefix: str, summarize_fn) -> Optional[Callable]:
         combined = pd.concat(accumulated, ignore_index=True)
         combined["coef"] = combined["coef"].apply(lambda c: f"{float(c):+g}")
 
+        coef_strs = sorted(combined["coef"].unique(), key=lambda c: float(c))
+        coef_floats = [float(c) for c in coef_strs]
+        abs_max = max(abs(min(coef_floats)), abs(max(coef_floats))) or 1.0
+        norm = plt.Normalize(vmin=-abs_max, vmax=abs_max)
+        cmap = plt.cm.RdBu_r
+
         metrics = [c for c in combined.columns if c not in _SKIP_COLS]
         charts: Dict[str, Any] = {}
         for metric in metrics:
             col_data = combined[["layer", "coef", metric]].dropna()
             if col_data.empty:
                 continue
-            table = wandb.Table(dataframe=col_data.round(4))
-            charts[f"{prefix}/{metric}"] = wandb.plot.line(
-                table, x="layer", y=metric, stroke="coef",
-                title=f"{prefix.upper()} — {metric}",
-            )
+            fig, ax = plt.subplots(figsize=(10, 5))
+            for coef_str in coef_strs:
+                grp = col_data[col_data["coef"] == coef_str].sort_values("layer")
+                if grp.empty:
+                    continue
+                ax.plot(grp["layer"], grp[metric],
+                        color=cmap(norm(float(coef_str))),
+                        marker="o", markersize=3, lw=1.5, label=coef_str)
+            ax.set_xlabel("Layer")
+            ax.set_ylabel(metric)
+            ax.set_title(f"{prefix.upper()} — {metric} (layers 0–{layer_idx})")
+            ax.legend(title="coef", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=7)
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            charts[f"{prefix}/{metric}"] = wandb.Image(fig)
+            plt.close(fig)
 
         if charts:
+            charts[f"{prefix}/layer"] = layer_idx
             run.log(charts)
 
     return _callback
@@ -226,6 +245,8 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 has_split=has_split,
             )
 
+    log_analysis_dashboard(run, out_dir)
+
 
 def _log_formulation_artifacts(
     run,
@@ -306,27 +327,14 @@ def _load_mcf_results(mcf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 def _load_cf_results(cf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
     from pathlib import Path as _Path
-    frames = []
-    for layer_dir in sorted(_Path(cf_dir).glob("layer_*")):
-        if not layer_dir.is_dir():
-            continue
-        try:
-            layer_idx = int(layer_dir.name.split("_", 1)[1])
-        except (IndexError, ValueError):
-            continue
-        wide_path = layer_dir / "detailed_wide.csv"
-        if not wide_path.exists():
-            continue
-        frame = pd.read_csv(wide_path)
-        frame["layer"] = layer_idx
-        frames.append(frame)
-    if not frames:
+    paths = sorted(_Path(cf_dir).glob("layer_*_results.csv"))
+    if not paths:
         return None
-    combined = pd.concat(frames, ignore_index=True)
+    df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
     if "split" in eval_df.columns:
-        split_map = eval_df["split"].to_dict()
-        combined["split"] = combined["question_id"].map(split_map).fillna("unknown")
-    return combined
+        split_map: Dict[int, str] = eval_df["split"].to_dict()
+        df["split"] = df["question_id"].map(split_map).fillna("unknown")
+    return df
 
 
 def _compute_split_summary(
@@ -560,9 +568,11 @@ def _build_metric_by_coef_charts(
     prefix: str,
     splits: Optional[list] = None,
 ) -> Dict[str, Any]:
-    """x=coef, y=metric_col, one line per layer (click legend to filter layers).
+    """x=coef, y=metric_col, one line per layer colored by depth (viridis colorbar).
     `splits`: list of (split_value, split_label) tuples; auto-detects val/test if None.
     """
+    import matplotlib.pyplot as plt
+
     out: Dict[str, Any] = {}
     if not _WANDB_AVAILABLE or results_df.empty or metric_col not in results_df.columns:
         return out
@@ -582,14 +592,29 @@ def _build_metric_by_coef_charts(
             .rename(columns={metric_col: y_label})
             .round(4)
         )
-        summary["layer"] = summary["layer"].astype(str)
-        table = wandb.Table(dataframe=summary)
-        chart = wandb.plot.line(
-            table, x="coef", y=y_label, stroke="layer",
-            title=f"{prefix.upper()} — {y_label} by Coef ({split_label})",
-        )
+        layers = sorted(summary["layer"].astype(int).unique())
+        cmap = plt.cm.viridis
+        norm = plt.Normalize(vmin=min(layers), vmax=max(layers))
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        for layer in layers:
+            grp = summary[summary["layer"] == layer].sort_values("coef")
+            if grp.empty:
+                continue
+            ax.plot(grp["coef"], grp[y_label],
+                    color=cmap(norm(layer)), marker="o", markersize=3, lw=1.5)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        plt.colorbar(sm, ax=ax, label="Layer")
+        ax.axvline(0, color="gray", lw=0.8, ls=":")
+        ax.set_xlabel("Coefficient")
+        ax.set_ylabel(y_label)
+        ax.set_title(f"{prefix.upper()} — {y_label} by Coef ({split_label})")
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
         key = f"{prefix}/{y_label}_by_coef_{split_val}" if split_val else f"{prefix}/{y_label}_by_coef"
-        out[key] = chart
+        out[key] = wandb.Image(fig)
+        plt.close(fig)
 
     return out
 
@@ -601,9 +626,11 @@ def _build_grouped_layer_charts(
     prefix: str,
     group_size: int = 10,
 ) -> Dict[str, Any]:
-    """x=coef, one line per layer-group (e.g. L0-9, L10-19 …), showing mean acc and mean delta_logprob.
+    """x=coef, one line per layer-group (e.g. L0-9, L10-19 …), each a distinct color.
     Logged for validation split only (or all data if no split).
     """
+    import matplotlib.pyplot as plt
+
     out: Dict[str, Any] = {}
     if not _WANDB_AVAILABLE or results_df.empty:
         return out
@@ -615,6 +642,8 @@ def _build_grouped_layer_charts(
     df = df.copy()
     base = (df["layer"] // group_size) * group_size
     df["layer_group"] = base.apply(lambda x: f"L{int(x)}-{int(x) + group_size - 1}")
+    groups = sorted(df["layer_group"].unique(), key=lambda g: int(g[1:].split("-")[0]))
+    colors = plt.cm.tab10.colors
 
     for metric_col, y_label in [(acc_col, "acc"), (delta_col, "delta_logprob")]:
         if metric_col not in df.columns:
@@ -627,12 +656,22 @@ def _build_grouped_layer_charts(
             .rename(columns={metric_col: y_label})
             .round(4)
         )
-        table = wandb.Table(dataframe=summary)
-        chart = wandb.plot.line(
-            table, x="coef", y=y_label, stroke="layer_group",
-            title=f"{prefix.upper()} — {y_label} by Coef, Grouped Layers (Validation)",
-        )
-        out[f"{prefix}/grouped_{y_label}_by_coef"] = chart
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for i, group in enumerate(groups):
+            grp = summary[summary["layer_group"] == group].sort_values("coef")
+            if grp.empty:
+                continue
+            ax.plot(grp["coef"], grp[y_label],
+                    color=colors[i % len(colors)], marker="o", markersize=4, lw=1.5, label=group)
+        ax.axvline(0, color="gray", lw=0.8, ls=":")
+        ax.set_xlabel("Coefficient")
+        ax.set_ylabel(y_label)
+        ax.set_title(f"{prefix.upper()} — {y_label} by Coef, Grouped Layers (Validation)")
+        ax.legend(title="Layer Group", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=9)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        out[f"{prefix}/grouped_{y_label}_by_coef"] = wandb.Image(fig)
+        plt.close(fig)
 
     return out
 
@@ -666,12 +705,33 @@ def _build_best_coef_table(
     return wandb.Table(dataframe=best)
 
 
+def log_analysis_dashboard(run, out_dir: Path) -> None:
+    """Run the analysis dashboard and log all plots as images under analysis/."""
+    if run is None or not _WANDB_AVAILABLE:
+        return
+    try:
+        import sys
+        project_root = Path(__file__).parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        from analysis.analysis_dashboard import run_all_plots
+        print("[wandb] generating analysis dashboard plots …")
+        figures = run_all_plots(Path(out_dir))
+        if figures:
+            run.log({f"analysis/{name}": img for name, img in figures.items()})
+            print(f"[wandb] logged {len(figures)} analysis dashboard figures")
+    except FileNotFoundError as e:
+        print(f"[wandb] analysis dashboard skipped — data not found: {e}")
+    except Exception as e:
+        print(f"[wandb] analysis dashboard failed: {e}")
+
+
 def _build_test_steering_plot(
     results_df: pd.DataFrame,
     acc_col: str,
     prefix: str,
 ) -> Optional[Any]:
-    """x=layer, y=test_acc, 3 lines:
+    """x=layer, y=test_acc, 3 lines (each a distinct color):
       - baseline (coef=0 on test)
       - oracle   (best val coef per layer, evaluated on test)
       - fixed    (single globally-best val coef, evaluated on test)
@@ -686,7 +746,6 @@ def _build_test_steering_plot(
     if val_df.empty or test_df.empty:
         return None
 
-    # Select best coef per layer from validation
     val_non_base = val_df[val_df["coef"] != 0.0]
     if val_non_base.empty:
         return None
@@ -705,20 +764,27 @@ def _build_test_steering_plot(
         row = test_per[(test_per["layer"] == layer) & (test_per["coef"] == coef)]
         return round(float(row[acc_col].values[0]), 4) if len(row) else float("nan")
 
-    layers = sorted(test_df["layer"].unique().tolist())
-    rows = []
-    for layer in layers:
-        layer = int(layer)
-        rows.append({"layer": layer, "acc": _acc(layer, 0.0),           "line": "baseline (coef=0)"})
-        rows.append({"layer": layer, "acc": _acc(layer, oracle_map.get(layer, global_best)), "line": "oracle (best val coef/layer)"})
-        rows.append({"layer": layer, "acc": _acc(layer, global_best),   "line": f"fixed best (coef={global_best:+g})"})
+    layers = sorted(int(l) for l in test_df["layer"].unique())
 
-    df = pd.DataFrame(rows).dropna(subset=["acc"])
-    if df.empty:
-        return None
+    import matplotlib.pyplot as plt
 
-    table = wandb.Table(dataframe=df)
-    return wandb.plot.line(
-        table, x="layer", y="acc", stroke="line",
-        title=f"{prefix.upper()} — Test: Baseline vs Steering",
-    )
+    fig, ax = plt.subplots(figsize=(12, 6))
+    specs = [
+        ("baseline (coef=0)",                lambda l: _acc(l, 0.0),                          "gray",      "o", "--"),
+        ("oracle (best val coef/layer)",      lambda l: _acc(l, oracle_map.get(l, global_best)), "steelblue", "^", "-"),
+        (f"fixed best (coef={global_best:+g})", lambda l: _acc(l, global_best),               "tomato",    "o", "-"),
+    ]
+    for label, fn, color, marker, ls in specs:
+        ys = [fn(l) for l in layers]
+        ax.plot(layers, ys, color=color, marker=marker, ls=ls,
+                markersize=4, lw=2, label=label)
+
+    ax.set_xlabel("Layer")
+    ax.set_ylabel("Accuracy")
+    ax.set_title(f"{prefix.upper()} — Test: Baseline vs Steering")
+    ax.legend(loc="best", fontsize=9)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    img = wandb.Image(fig)
+    plt.close(fig)
+    return img

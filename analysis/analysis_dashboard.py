@@ -83,23 +83,15 @@ def load_mcf(exp_root: Path) -> pd.DataFrame:
 
 
 def load_cf_wide(exp_root: Path) -> pd.DataFrame:
-    """Load all CF detailed_wide per-question data from per-layer dirs."""
+    """Load all CF per-question data from per-layer CSVs."""
     dfs = []
-    layer_dirs = sorted(
-        [d for d in (exp_root / "cf").iterdir() if d.is_dir() and d.name.startswith("layer_")],
-        key=lambda d: int(d.name.split("_")[1]),
-    )
-    for d in layer_dirs:
-        layer = int(d.name.split("_")[1])
-        wide = d / "detailed_wide.csv"
-        if not wide.exists():
-            warnings.warn(f"Missing detailed_wide.csv for CF {d.name} — skipping")
-            continue
-        df = pd.read_csv(wide)
+    for f in sorted(glob.glob(str(exp_root / "cf" / "layer_*_results.csv"))):
+        layer = int(Path(f).stem.split("layer_")[1].split("_")[0])
+        df = pd.read_csv(f)
         df["layer"] = layer
         dfs.append(df)
     if not dfs:
-        raise FileNotFoundError(f"No CF layer dirs in {exp_root / 'cf'}")
+        raise FileNotFoundError(f"No CF layer files in {exp_root / 'cf'}")
     return pd.concat(dfs, ignore_index=True)
 
 
@@ -147,19 +139,23 @@ def find_best_pos_coef(agg: pd.DataFrame) -> float:
 # SAVE HELPER
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Set by main() based on CLI flags
+# Set by main() / run_all_plots() based on CLI flags or call context
 _out_dir: Path = None
 _show: bool = True
+_wandb_log: dict = None  # when set, save() captures figures here instead of closing them
 
 
 def save(fig, name: str):
+    if _wandb_log is not None:
+        _wandb_log[name] = fig  # keep open; caller closes after WandB logging
     if _out_dir is not None:
         _out_dir.mkdir(parents=True, exist_ok=True)
         fig.savefig(_out_dir / f"{name}.png")
         print(f"  saved {name}.png")
     if _show:
         plt.show()
-    plt.close(fig)
+    if _wandb_log is None:
+        plt.close(fig)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -496,6 +492,79 @@ def plot_question_correlation(mcf: pd.DataFrame, cf: pd.DataFrame, bc: float,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# WANDB INTEGRATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_all_plots(exp_root: Path) -> dict:
+    """Generate all dashboard plots and return {name: wandb.Image}.
+    Does not display or save — purely for WandB upload.
+    Requires wandb to be importable (not necessarily active).
+    """
+    import wandb as _wandb
+    global _wandb_log, _out_dir, _show
+
+    saved_out, saved_show = _out_dir, _show
+    _wandb_log = {}
+    _out_dir = None
+    _show = False
+
+    try:
+        mcf, cf, mcf_s, cf_s = None, None, None, None
+        try:
+            mcf = load_mcf(exp_root)
+            mcf_s = agg_mcf(mcf)
+        except FileNotFoundError as exc:
+            warnings.warn(str(exc))
+        try:
+            cf = load_cf_wide(exp_root)
+            cf_s = agg_cf(cf)
+        except FileNotFoundError as exc:
+            warnings.warn(str(exc))
+        if mcf_s is None and cf_s is None:
+            raise FileNotFoundError(f"No MCF or CF data found under {exp_root}")
+
+        for agg, raw, mode, rank_col in [
+            (mcf_s, mcf, "MCF", "rank_change"),
+            (cf_s,  cf,  "CF",  "rank_change_sum"),
+        ]:
+            if agg is None:
+                continue
+            bc = find_best_pos_coef(agg)
+            plot_heatmap(agg, mode)
+            plot_layer_sweep(agg, mode)
+            plot_coef_sweep(agg, mode)
+            plot_best_layer_bar(agg, mode)
+            plot_improved_hurt(agg, mode)
+            plot_asymmetry(agg, mode)
+            plot_coef0_drift(agg, mode)
+            if raw is not None:
+                plot_rank_violin(raw, mode, rank_col, bc)
+            plot_pct_rank1(agg, mode)
+
+        if mcf is not None and mcf_s is not None:
+            bc_mcf = find_best_pos_coef(mcf_s)
+            plot_baseline_vs_steered(mcf, bc_mcf)
+            plot_question_layer_heatmap(mcf, bc_mcf)
+            plot_steerable_resistant(mcf, bc_mcf)
+
+        if mcf_s is not None and cf_s is not None and mcf is not None and cf is not None:
+            bc_mcf = find_best_pos_coef(mcf_s)
+            bc_cf  = find_best_pos_coef(cf_s)
+            plot_best_layer_comparison(mcf_s, cf_s)
+            plot_question_correlation(mcf, cf, min(bc_mcf, bc_cf))
+
+        result = {name: _wandb.Image(fig) for name, fig in _wandb_log.items()}
+        for fig in _wandb_log.values():
+            plt.close(fig)
+        return result
+
+    finally:
+        _out_dir = saved_out
+        _show = saved_show
+        _wandb_log = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -511,6 +580,10 @@ def main():
                         help="Directory for saved PNGs (requires --save)")
     parser.add_argument("--show", action="store_true", default=None,
                         help="Show plots interactively (default: on when --save is not set)")
+    parser.add_argument("--wandb-run-id", default=None,
+                        help="Resume an existing W&B run by ID and log all plots there")
+    parser.add_argument("--wandb-project", default="steering-vectors",
+                        help="W&B project name (used with --wandb-run-id)")
     args = parser.parse_args()
 
     exp_root = Path(args.exp_root)
@@ -520,6 +593,8 @@ def main():
         _out_dir = None
     # default: show=True unless --save is given without --show
     _show = args.show if args.show is not None else (not args.save)
+    if args.wandb_run_id:
+        _wandb_log = {}
 
     print("Loading MCF data...")
     mcf = load_mcf(exp_root)
@@ -577,6 +652,21 @@ def main():
     print("── Cross-method MCF vs CF")
     plot_best_layer_comparison(mcf_s, cf_s)
     plot_question_correlation(mcf, cf, bc_cross)
+
+    if args.wandb_run_id and _wandb_log:
+        try:
+            import wandb as _wandb
+            print(f"\n[wandb] resuming run {args.wandb_run_id} …")
+            wrun = _wandb.init(project=args.wandb_project, id=args.wandb_run_id, resume="must")
+            wrun.log({f"analysis/{name}": _wandb.Image(fig) for name, fig in _wandb_log.items()})
+            wrun.finish()
+            print(f"[wandb] logged {len(_wandb_log)} plots to run {args.wandb_run_id}")
+        except Exception as exc:
+            print(f"[wandb] upload failed: {exc}")
+        finally:
+            for fig in list((_wandb_log or {}).values()):
+                plt.close(fig)
+            _wandb_log = None
 
     print("\nDone.")
 
