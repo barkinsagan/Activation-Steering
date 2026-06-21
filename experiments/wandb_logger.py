@@ -410,10 +410,11 @@ def _apply_split(df: pd.DataFrame, eval_df: pd.DataFrame, results_dir: Path) -> 
     if manifest.exists():
         mdf = pd.read_csv(manifest)
         print(f"[wandb] manifest columns: {list(mdf.columns)}, rows: {len(mdf)}")
-        if "question_id" in mdf.columns and "split" in mdf.columns:
-            split_map = mdf.set_index("question_id")["split"].to_dict()
+        id_col = next((c for c in ("question_id", "eval_question_id") if c in mdf.columns), None)
+        if id_col and "split" in mdf.columns:
+            split_map = mdf.set_index(id_col)["split"].to_dict()
             df["split"] = df["question_id"].map(split_map).fillna("unknown")
-            print(f"[wandb] split loaded: {df['split'].value_counts().to_dict()}")
+            print(f"[wandb] split loaded via '{id_col}': {df['split'].value_counts().to_dict()}")
         else:
             print(f"[wandb] manifest missing expected columns — skipping")
     return df
