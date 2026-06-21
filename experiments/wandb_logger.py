@@ -41,12 +41,6 @@ def init_run(cfg) -> Optional[Any]:
         config=dataclasses.asdict(cfg),
         reinit=True,
     )
-    # Give each formulation prefix its own x-axis so MCF and CF layers don't
-    # collide on the shared global step counter.
-    run.define_metric("mcf/layer")
-    run.define_metric("mcf/*", step_metric="mcf/layer")
-    run.define_metric("cf/layer")
-    run.define_metric("cf/*", step_metric="cf/layer")
     print(f"[wandb] run initialised: {run.url if hasattr(run, 'url') else run.id}")
     return run
 
@@ -117,7 +111,6 @@ def make_layer_callback(run, prefix: str, summarize_fn) -> Optional[Callable]:
             plt.close(fig)
 
         if charts:
-            charts[f"{prefix}/layer"] = layer_idx
             run.log(charts)
 
     return _callback
