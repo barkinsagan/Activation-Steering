@@ -222,9 +222,11 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 has_split=has_split,
             )
 
+    print(f"[wandb] cf_results_exist={cf_results_exist}, formulation={s.formulation}")
     if s.formulation in ("cf", "both") and cf_results_exist:
         norm = s.cf_normalization
         cf_df = _load_cf_results(out_dir / "cf", eval_df)
+        print(f"[wandb] cf_df: {len(cf_df) if cf_df is not None else None} rows, split col={'split' in cf_df.columns if cf_df is not None else 'N/A'}")
         if cf_df is not None:
             _log_formulation_artifacts(
                 run=run,
