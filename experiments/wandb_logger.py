@@ -399,28 +399,36 @@ def _log_layer_sweep_charts(
         run.log(charts)
 
 
-def _load_mcf_results(mcf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    from pathlib import Path as _Path
-    paths = sorted(_Path(mcf_dir).glob("layer_*_results.csv"))
-    if not paths:
-        return None
-    df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+def _apply_split(df: pd.DataFrame, eval_df: pd.DataFrame, results_dir: Path) -> pd.DataFrame:
+    """Add a 'split' column to df from eval_df or split_manifest.csv fallback."""
     if "split" in eval_df.columns:
         split_map: Dict[int, str] = eval_df["split"].to_dict()
         df["split"] = df["question_id"].map(split_map).fillna("unknown")
+        return df
+    manifest = results_dir / "split_manifest.csv"
+    if manifest.exists():
+        mdf = pd.read_csv(manifest)
+        if "question_id" in mdf.columns and "split" in mdf.columns:
+            split_map = mdf.set_index("question_id")["split"].to_dict()
+            df["split"] = df["question_id"].map(split_map).fillna("unknown")
+            print(f"[wandb] split loaded from {manifest}: {df['split'].value_counts().to_dict()}")
     return df
+
+
+def _load_mcf_results(mcf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    paths = sorted(Path(mcf_dir).glob("layer_*_results.csv"))
+    if not paths:
+        return None
+    df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    return _apply_split(df, eval_df, Path(mcf_dir).parent)
 
 
 def _load_cf_results(cf_dir, eval_df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    from pathlib import Path as _Path
-    paths = sorted(_Path(cf_dir).glob("layer_*_results.csv"))
+    paths = sorted(Path(cf_dir).glob("layer_*_results.csv"))
     if not paths:
         return None
     df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
-    if "split" in eval_df.columns:
-        split_map: Dict[int, str] = eval_df["split"].to_dict()
-        df["split"] = df["question_id"].map(split_map).fillna("unknown")
-    return df
+    return _apply_split(df, eval_df, Path(cf_dir).parent)
 
 
 def _compute_split_summary(
