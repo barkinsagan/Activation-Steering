@@ -1,0 +1,47 @@
+experiment_id: exp_20260621_gpqa_physics_qwen32b_split50
+
+model:
+  name: Qwen/Qwen3-32B
+  dtype: bfloat16
+  device: auto
+
+dataset:
+  eval_path: data/eval/gpqa_main_physics_sweep.csv
+  neg_capture_path: data/eval/mmlu_nonmed_sweep.csv
+  split:
+    steering: 50
+    validation: 30
+    test: 20
+
+sweep:
+  formulation: both
+  layers: null                  # all layers (64 for Qwen3-32B)
+  coef_range:
+    - [-5,  -2, 1]
+    - [-2,  -1, 1]
+    - [-1,   1, 0.25]
+    - [ 1,   2, 1]
+    - [ 2,   5, 1]
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+  task_prefix: question
+  num_shots: 5
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+  generate_examples: false
+  coef_batch_size: 2            # 32B on multi-GPU — score 2 coefs at a time to avoid OOM
+  capture_batch_size: 8         # 32B across 2 GPUs — conservative to avoid OOM
+
+output:
+  base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [qwen3-32b, gpqa-physics, mcf-cf, normalized-unit, split-comparison]
+  notes: "Split comparison — Qwen3 32B, GPQA physics, 50/30/20 split"
+  mode: online
