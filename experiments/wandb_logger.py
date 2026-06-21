@@ -245,7 +245,6 @@ def log_final_summary(run, cfg, eval_df: pd.DataFrame, out_dir) -> None:
                 has_split=has_split,
             )
 
-    log_analysis_dashboard(run, out_dir)
 
 
 def _log_formulation_artifacts(
@@ -312,7 +311,7 @@ def _build_oracle_charts(
     ax1.set_title(f"{prefix.upper()} — Best Coefficient per Layer  (selected on Validation)")
     ax1.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
-    out[f"{prefix}/best_coef_per_layer"] = wandb.Image(fig1)
+    out[f"analysis/{prefix}/best_coef_per_layer"] = wandb.Image(fig1)
     plt.close(fig1)
 
     # ── Chart 2: oracle test gain per layer ───────────────────────────────────
@@ -347,7 +346,7 @@ def _build_oracle_charts(
     ax2.set_title(f"{prefix.upper()} — Test Gain per Layer  (oracle: best-val coef per layer)")
     ax2.grid(True, alpha=0.3)
     plt.tight_layout()
-    out[f"{prefix}/test_oracle_gain_per_layer"] = wandb.Image(fig2)
+    out[f"analysis/{prefix}/test_oracle_gain_per_layer"] = wandb.Image(fig2)
     plt.close(fig2)
 
     return out
