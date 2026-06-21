@@ -332,15 +332,21 @@ def _build_oracle_charts(
         return out
     vl, vd = zip(*valid)
 
+    bar_colors = ["tomato" if d >= 0 else "steelblue" for d in vd]
     fig2, ax2 = plt.subplots(figsize=(12, 4))
-    ax2.plot(vl, vd, color="steelblue", marker="o", markersize=4, lw=2)
-    ax2.axhline(0, color="black", lw=0.8, ls="--")
-    ax2.fill_between(vl, vd, 0, where=[d >= 0 for d in vd], alpha=0.2, color="tomato")
-    ax2.fill_between(vl, vd, 0, where=[d < 0  for d in vd], alpha=0.2, color="steelblue")
+    ax2.bar(vl, vd, color=bar_colors, width=0.8,
+            label=None)
+    ax2.axhline(0, color="black", lw=1.0)
+    # legend patches
+    import matplotlib.patches as mpatches
+    ax2.legend(handles=[
+        mpatches.Patch(color="tomato",    label="positive gain (steered > baseline)"),
+        mpatches.Patch(color="steelblue", label="negative gain (steered < baseline)"),
+    ], fontsize=9)
     ax2.set_xlabel("Layer")
     ax2.set_ylabel("Steered − Baseline Accuracy")
     ax2.set_title(f"{prefix.upper()} — Test Gain per Layer  (oracle: best-val coef per layer)")
-    ax2.grid(True, alpha=0.3)
+    ax2.grid(True, alpha=0.3, axis="y")
     plt.tight_layout()
     out[f"analysis/{prefix}/test_oracle_gain_per_layer"] = wandb.Image(fig2)
     plt.close(fig2)
