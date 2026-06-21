@@ -252,7 +252,10 @@ def _log_formulation_artifacts(
     has_split: bool,
 ) -> None:
     try:
+        print(f"[wandb] {prefix}: {len(results_df)} rows, columns: {list(results_df.columns)}")
+        print(f"[wandb] {prefix}: split values = {results_df['split'].unique().tolist() if 'split' in results_df.columns else 'NO SPLIT COLUMN'}")
         charts = _build_oracle_charts(results_df, acc_col, prefix)
+        print(f"[wandb] {prefix}: oracle charts generated = {list(charts.keys())}")
         if charts:
             run.log(charts)
     except Exception as e:
