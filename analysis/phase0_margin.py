@@ -6,10 +6,9 @@ For each (layer, coef, question): compute
 
 Then delta_margin = margin(coef) - margin(baseline=0).
 
-Key question: positive coef raises correct logprob (delta_correct_logprob > 0)
-but also raises wrong logprobs even more → margin shrinks → accuracy drops.
-Negative coef should show the reverse: delta_margin > 0 even if
-delta_correct_logprob < 0.
+The key section is Section 1: for each layer, find the best val coef, then
+report its margin story on the test set. Averaging over all coefs is
+misleading — only the val-selected coef matters.
 
 Also prints the text of layer-13 flips (wrong→right at best negative coef).
 
@@ -51,6 +50,21 @@ def add_margin(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _attach_split(df: pd.DataFrame, exp_dir: Path) -> pd.DataFrame:
+    manifest = exp_dir / "split_manifest.csv"
+    if not manifest.exists():
+        df["split"] = "all"
+        return df
+    m = pd.read_csv(manifest)
+    id_col = next((c for c in ("eval_question_id", "question_id") if c in m.columns), None)
+    if id_col is None or "split" not in m.columns:
+        df["split"] = "all"
+        return df
+    split_map = dict(zip(m[id_col], m["split"]))
+    df["split"] = df["question_id"].map(split_map).fillna("unknown")
+    return df
+
+
 def add_delta_margin(df: pd.DataFrame) -> pd.DataFrame:
     """Add delta_margin = margin(coef) - margin(coef=0) per (layer, question_id)."""
     base = (
@@ -63,37 +77,54 @@ def add_delta_margin(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def aggregate_by_sign(df: pd.DataFrame) -> pd.DataFrame:
-    nz = df[df["coef"] != 0.0].copy()
-    nz["sign"] = nz["coef"].apply(lambda c: "pos" if c > 0 else "neg")
+def val_selected_margin(df: pd.DataFrame) -> pd.DataFrame:
+    """For each layer: find best val coef (by accuracy), report its margin story on test.
 
+    This is the meaningful analysis — averaging over all coefs is noise.
+    Only the coef the val set would pick actually gets deployed to test.
+    """
+    has_splits = df["split"].nunique() > 1
+    val = df[df["split"] == "validation"] if has_splits else df
+    test = df[df["split"] == "test"] if has_splits else df
+
+    val_per = val.groupby(["layer", "coef"])["correct"].mean()
     rows = []
-    for sign, grp in nz.groupby("sign"):
+    for layer in sorted(df["layer"].unique()):
+        # best non-zero coef on val
+        layer_val = val_per[val_per.index.get_level_values("layer") == layer]
+        nz = layer_val[layer_val.index.get_level_values("coef") != 0.0]
+        if nz.empty:
+            continue
+        best_coef = float(nz.idxmax()[1])
+        sign = "neg" if best_coef < 0 else "pos"
+
+        # val stats at best coef
+        v = val[(val["layer"] == layer) & (val["coef"] == best_coef)]
+        val_acc   = round(v["correct"].mean(), 4)
+        val_dc    = round(v["delta_correct_logprob"].mean(), 4)
+        val_dm    = round(v["delta_margin"].mean(), 4)
+
+        # test stats at same coef
+        t = test[(test["layer"] == layer) & (test["coef"] == best_coef)]
+        if t.empty:
+            test_acc = test_dc = test_dm = float("nan")
+        else:
+            test_acc  = round(t["correct"].mean(), 4)
+            test_dc   = round(t["delta_correct_logprob"].mean(), 4)
+            test_dm   = round(t["delta_margin"].mean(), 4)
+
         rows.append({
-            "sign":                sign,
-            "n_combos":            len(grp),
-            "mean_delta_correct":  round(grp["delta_correct_logprob"].mean(), 4),
-            "mean_delta_margin":   round(grp["delta_margin"].mean(), 4),
-            "pct_margin_improved": round((grp["delta_margin"] > 0).mean(), 4),
-            "pct_correct_improved":round((grp["delta_correct_logprob"] > 0).mean(), 4),
+            "layer":          int(layer),
+            "best_val_coef":  best_coef,
+            "sign":           sign,
+            "val_acc":        val_acc,
+            "val_delta_correct": val_dc,
+            "val_delta_margin":  val_dm,
+            "test_acc":       test_acc,
+            "test_delta_correct": test_dc,
+            "test_delta_margin":  test_dm,
         })
     return pd.DataFrame(rows)
-
-
-def per_layer_sign(df: pd.DataFrame) -> pd.DataFrame:
-    nz = df[df["coef"] != 0.0].copy()
-    nz["sign"] = nz["coef"].apply(lambda c: "pos" if c > 0 else "neg")
-
-    rows = []
-    for (layer, sign), grp in nz.groupby(["layer", "sign"]):
-        rows.append({
-            "layer":               int(layer),
-            "sign":                sign,
-            "mean_delta_correct":  round(grp["delta_correct_logprob"].mean(), 4),
-            "mean_delta_margin":   round(grp["delta_margin"].mean(), 4),
-            "pct_margin_improved": round((grp["delta_margin"] > 0).mean(), 4),
-        })
-    return pd.DataFrame(rows).sort_values(["layer", "sign"]).reset_index(drop=True)
 
 
 def flip_details(df: pd.DataFrame, layer: int) -> None:
@@ -165,36 +196,29 @@ def main():
     if missing:
         sys.exit(f"[!] Missing columns: {missing}\n    Available: {list(df.columns)}")
 
+    df = _attach_split(df, args.exp_dir)
     df = add_margin(df)
     df = add_delta_margin(df)
 
-    print(f"  {len(df):,} rows  |  layers: {df['layer'].nunique()}  |  coefs: {df['coef'].nunique()}  |  questions: {df['question_id'].nunique()}\n")
+    splits = df.groupby("split")["question_id"].nunique().to_dict()
+    print(f"  {len(df):,} rows  |  layers: {df['layer'].nunique()}  |  coefs: {df['coef'].nunique()}  |  splits: {splits}\n")
 
-    _hr("1. Aggregate: delta_correct_logprob vs delta_margin by coef sign")
-    agg = aggregate_by_sign(df)
-    _print_df(agg)
+    _hr("1. Val-selected coef → margin story on test (the meaningful analysis)")
+    focused = val_selected_margin(df)
+    _print_df(focused)
     print(
-        "\n  KEY: if pos has mean_delta_correct > 0 but mean_delta_margin < 0"
-        "\n       → positive coef raises correct logprob but wrong logprobs rise MORE"
-        "\n       → margin shrinks → accuracy drops despite higher correct logprob"
+        "\n  Read: val_delta_margin > 0 → the val-best coef improves the margin on val"
+        "\n        test_delta_margin > 0 → it also improves margin on test (confirms mechanism)"
+        "\n        test_delta_margin < 0 → accuracy gain is not margin-based (noise / threshold luck)"
     )
 
     print()
-    _hr("2. Per-layer breakdown (mean delta_margin by sign)")
-    layer_tbl = per_layer_sign(df)
-    _print_df(layer_tbl)
-
-    print()
-    _hr(f"3. Flip details at layer {args.layer}")
+    _hr(f"2. Flip details at layer {args.layer}")
     flip_details(df, layer=args.layer)
 
     if args.save:
         args.save.mkdir(parents=True, exist_ok=True)
-        agg.to_csv(args.save / "margin_aggregate.csv", index=False)
-        layer_tbl.to_csv(args.save / "margin_per_layer.csv", index=False)
-        df[df["coef"] != 0.0][["layer", "question_id", "coef",
-                                "delta_correct_logprob", "delta_margin", "correct"]]\
-            .to_csv(args.save / "margin_all_rows.csv", index=False)
+        focused.to_csv(args.save / "val_selected_margin.csv", index=False)
         print(f"\nSaved to {args.save}/")
 
 
