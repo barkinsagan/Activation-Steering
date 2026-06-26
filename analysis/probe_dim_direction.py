@@ -74,6 +74,56 @@ def _activation_norms(acts: List[torch.Tensor]) -> List[float]:
     return stacked.norm(dim=-1).tolist()
 
 
+def _split_half_stability(
+    pos_acts: List[torch.Tensor],
+    neg_acts: List[torch.Tensor],
+    n_splits: int = 5,
+    seed: int = 42,
+) -> Tuple[float, float]:
+    """Measure reproducibility of the DIM direction across random subsamples.
+
+    Repeatedly splits the captured pos/neg activations into two random halves,
+    computes a DIM vector from each half, and measures the cosine similarity
+    between the two estimates.
+
+    High mean cos → the direction is the same regardless of which half of the
+    samples you use → the direction is real, not a sampling artifact.
+    Low mean cos → different subsamples find different directions → the
+    estimated direction is largely noise.
+
+    Returns:
+        (mean cosine, std cosine) over n_splits independent random partitions.
+    """
+    pos_stack = torch.stack(pos_acts).float()   # [N_p, H]
+    neg_stack = torch.stack(neg_acts).float()   # [N_n, H]
+    n_p, n_n = pos_stack.shape[0], neg_stack.shape[0]
+    half_p, half_n = n_p // 2, n_n // 2
+
+    if half_p < 2 or half_n < 2:
+        return float("nan"), float("nan")
+
+    cosines: List[float] = []
+    for split_i in range(n_splits):
+        g = torch.Generator().manual_seed(seed + split_i * 1000 + 1)
+        p_perm = torch.randperm(n_p, generator=g)
+        n_perm = torch.randperm(n_n, generator=g)
+
+        idx_pA, idx_pB = p_perm[:half_p],     p_perm[half_p:2 * half_p]
+        idx_nA, idx_nB = n_perm[:half_n],     n_perm[half_n:2 * half_n]
+
+        v_A = pos_stack[idx_pA].mean(0) - neg_stack[idx_nA].mean(0)
+        v_B = pos_stack[idx_pB].mean(0) - neg_stack[idx_nB].mean(0)
+
+        c = torch.nn.functional.cosine_similarity(
+            v_A.unsqueeze(0), v_B.unsqueeze(0)
+        ).item()
+        cosines.append(c)
+
+    mean_c = sum(cosines) / len(cosines)
+    var_c = sum((c - mean_c) ** 2 for c in cosines) / max(len(cosines) - 1, 1)
+    return mean_c, var_c ** 0.5
+
+
 def _stats(values: List[float]) -> Tuple[float, float, float, float]:
     t = torch.tensor(values)
     return (
@@ -209,6 +259,16 @@ def main():
         pooled_sigma = ((sigma_pos ** 2 + sigma_neg ** 2) / 2) ** 0.5
         snr = raw_diff_norm / pooled_sigma if pooled_sigma > 0 else float("inf")
 
+        # Split-half reproducibility: does the DIM direction agree across
+        # random subsamples of the captured prompts? Tests stability without
+        # needing more data — answers "is the direction real, or sample-specific?"
+        split_half_cos_mean, split_half_cos_std = _split_half_stability(
+            dim.positive_activations,
+            dim.negative_activations,
+            n_splits=5,
+            seed=s.seed,
+        )
+
         diagnostics.append({
             "layer":            layer_idx,
             "cos_mu_pos_mu_neg": round(cos_mu, 4),
@@ -216,6 +276,8 @@ def main():
             "sigma_pos":        round(sigma_pos, 4),
             "sigma_neg":        round(sigma_neg, 4),
             "snr":              round(snr, 4),
+            "split_half_cos_mean": round(split_half_cos_mean, 4),
+            "split_half_cos_std":  round(split_half_cos_std, 4),
             "mu_pos_norm":      round(mu_pos_norm, 4),
             "mu_neg_norm":      round(mu_neg_norm, 4),
         })
@@ -225,6 +287,7 @@ def main():
             f"||μ_p−μ_n||={raw_diff_norm:.3f}  "
             f"σ_p={sigma_pos:.3f}  σ_n={sigma_neg:.3f}  "
             f"SNR={snr:.3f}  "
+            f"split-half-cos={split_half_cos_mean:+.4f}±{split_half_cos_std:.4f}  "
             f"||μ_p||={mu_pos_norm:.2f}  ||μ_n||={mu_neg_norm:.2f}"
         )
 
@@ -298,6 +361,19 @@ def main():
     )
     print(
         "    SNR < 1  → within-class spread dominates; DIM is mostly noise."
+    )
+    print(
+        "  split_half_cos       → mean cosine between DIM vectors from two random halves"
+        " of the data (5 splits)."
+    )
+    print(
+        "    > 0.85  → direction is highly reproducible across subsamples. Real signal."
+    )
+    print(
+        "    0.5–0.85 → partially reproducible; small-n wobble but underlying direction exists."
+    )
+    print(
+        "    < 0.5   → different subsamples find different directions. Dominated by noise."
     )
     with pd.option_context("display.float_format", lambda x: f"{x:+.4f}",
                            "display.max_columns", None, "display.width", 200):
