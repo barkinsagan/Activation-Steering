@@ -1,0 +1,52 @@
+experiment_id: exp_20260626_gpqa_phys_vs_bio_llama8b
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: bfloat16
+  device: cuda
+
+dataset:
+  # Positive (eval target) is still GPQA physics — we want to know if a clean,
+  # style-matched DIM still steers physics performance.
+  eval_path: data/eval/gpqa_main_physics_sweep.csv
+  # Negative is GPQA biology (style-matched: same dataset, same format,
+  # same difficulty distribution). This isolates the domain axis from the
+  # "GPQA-style hard-science MCQA" axis that the physics-vs-MMLU vector
+  # was confounded with.
+  neg_capture_path: data/eval/gpqa_main_biology_sweep.csv
+  split:
+    steering: 20
+    validation: 60
+    test: 20
+
+sweep:
+  formulation: both
+  layers: null                  # all 32 layers
+  coef_range:
+    - [-5,  -2, 1]
+    - [-2,  -1, 1]
+    - [-1,   1, 0.25]
+    - [ 1,   2, 1]
+    - [ 2,   5, 1]
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+  task_prefix: question
+  num_shots: 5
+  shuffle_choices: true
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+  generate_examples: false
+  capture_batch_size: 16
+
+output:
+  base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags: [llama3-8b, gpqa-physics, gpqa-biology-neg, mcf-cf, normalized-unit, style-matched-contrast]
+  notes: "Style-matched contrast: pos=GPQA physics, neg=GPQA biology. Tests whether the physics direction survives once GPQA-style/format confound is removed. Compare to exp_20260602_gpqa_physics_llama8b (same pos, neg=MMLU non-med)."
+  mode: online
