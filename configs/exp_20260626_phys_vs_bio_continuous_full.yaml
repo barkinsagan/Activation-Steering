@@ -1,0 +1,102 @@
+experiment_id: exp_20260626_phys_vs_bio_continuous_full
+
+model:
+  name: meta-llama/Meta-Llama-3-8B
+  dtype: bfloat16
+  device: cuda
+
+dataset:
+  # Pos = GPQA physics (127 rows total), Neg = GPQA biology (51 rows, max 46 usable
+  # after few-shot rows are skipped). Style-matched contrast: both sets share
+  # format, difficulty, and register — so the DIM vector should isolate the
+  # physics-vs-biology domain axis rather than format/style.
+  eval_path: data/eval/gpqa_main_physics_sweep.csv
+  neg_capture_path: data/eval/gpqa_main_biology_sweep.csv
+  split:
+    # Maximize the steering-capture set to push DIM stability up.
+    # With 40% × 127 = 51 phys (and bio capped at 46 after few-shot rows),
+    # the capture vector is at the n ≈ 50 regime where the probe showed
+    # split-half cosine ≈ 0.91 — i.e. the direction is reproducible.
+    steering: 40
+    # Validation gets 51 phys — fewer rows than 20/60/20, but continuous
+    # metrics (logprob deltas, logit gap, KL) have far higher statistical
+    # power than accuracy, so this is more than enough for detection.
+    validation: 40
+    # Held-out test for final reporting.
+    test: 20
+
+sweep:
+  # Both formulations: MCF gives single-token label logprobs, CF gives
+  # per-choice continuation logprobs for target + 3 wrong answers. CF is
+  # the workhorse for continuous metrics.
+  formulation: both
+
+  # All 32 layers — the analysis we want compares early/mid/late layers
+  # (L10–13 domain vs L20 universal-direction hypothesis), and the cheap
+  # way to get that is sweep them all and slice afterward.
+  layers: null
+
+  # Coefficient grid: dense near zero where small linear-response effects
+  # are most informative for continuous metrics; thinner at the extremes
+  # where saturation/blowup kicks in.
+  coef_range:
+    - [-4,  -2,   1]
+    - [-2,  -1,   0.5]
+    - [-1,   1,   0.25]
+    - [ 1,   2,   0.5]
+    - [ 2,   4,   1]
+
+  token_position: last
+  normalize_vector: true
+  norm_type: unit
+
+  task_prefix: question
+  num_shots: 5
+  shuffle_choices: true
+
+  layer_name_pattern: "model.layers.{layer_idx}"
+  max_length: 2048
+  resume: true
+  verbose_every: 10
+
+  # No qualitative generations — pure logprob/accuracy sweep.
+  generate_examples: false
+
+  # CF logprob normalization: OLMES default. Affects the CF answer-choice
+  # ranking metric, not the raw per-choice logprobs we want for continuous
+  # analysis.
+  cf_normalization: character
+
+  capture_batch_size: 16
+
+output:
+  base_dir: results/
+
+wandb:
+  enabled: true
+  project: steering-vectors
+  tags:
+    - llama3-8b
+    - gpqa-physics
+    - gpqa-biology-neg
+    - mcf-cf
+    - all-layers
+    - continuous-metrics
+    - style-matched-contrast
+  notes: |
+    Continuous-metric sweep with style-matched negative (GPQA biology).
+    Goal: detect target-aware steering via Δ-correct-logprob > Δ-wrong-logprob,
+    not via raw accuracy (which is underpowered at n=25 test).
+
+    Compare against:
+      - exp_20260626_gpqa_phys_vs_bio_llama8b (same vector, 20/60/20 split)
+      - exp_20260602_gpqa_physics_llama8b (MMLU-as-neg vector for control)
+
+    Key analyses to run on the CF outputs:
+      1. Per-(layer, coef): mean Δ-correct-logprob vs baseline
+      2. Per-(layer, coef): mean Δ-best-wrong-logprob vs baseline
+      3. Per-(layer, coef): Δ-logit-gap (correct − best-wrong)
+      4. KL(steered || baseline) over the 4-choice answer distribution
+      5. Selectivity index: (Δ-correct − Δ-wrong) / |Δ-correct + Δ-wrong|
+         — positive means steering is target-aware (helps correct more than wrong)
+  mode: online
