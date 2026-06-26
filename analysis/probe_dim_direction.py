@@ -186,9 +186,12 @@ def main():
 
         # ── Vector diagnostics: compute BEFORE the probe loop overwrites the
         #    activation buffers. These answer: are μ_pos and μ_neg already close
-        #    at this layer? Is the raw diff small (so unit-norm amplifies noise)?
-        mu_pos_raw = torch.stack(dim.positive_activations).float().mean(dim=0)
-        mu_neg_raw = torch.stack(dim.negative_activations).float().mean(dim=0)
+        #    at this layer? Is the within-class spread larger than the
+        #    between-class separation (i.e., is the DIM vector mostly noise)?
+        pos_stack = torch.stack(dim.positive_activations).float()   # [N_p, H]
+        neg_stack = torch.stack(dim.negative_activations).float()   # [N_n, H]
+        mu_pos_raw = pos_stack.mean(dim=0)
+        mu_neg_raw = neg_stack.mean(dim=0)
         diff_raw = mu_pos_raw - mu_neg_raw
         cos_mu = torch.nn.functional.cosine_similarity(
             mu_pos_raw.unsqueeze(0), mu_neg_raw.unsqueeze(0)
@@ -196,10 +199,23 @@ def main():
         mu_pos_norm = mu_pos_raw.norm().item()
         mu_neg_norm = mu_neg_raw.norm().item()
         raw_diff_norm = diff_raw.norm().item()
+
+        # Within-class spread: mean L2 distance of each activation from its
+        # class centroid. Lets us compute a Fisher-style SNR for the DIM
+        # direction — between-class separation divided by pooled within-class
+        # noise. SNR < 1 means the unit DIM vector is mostly sampling noise.
+        sigma_pos = (pos_stack - mu_pos_raw).norm(dim=-1).mean().item()
+        sigma_neg = (neg_stack - mu_neg_raw).norm(dim=-1).mean().item()
+        pooled_sigma = ((sigma_pos ** 2 + sigma_neg ** 2) / 2) ** 0.5
+        snr = raw_diff_norm / pooled_sigma if pooled_sigma > 0 else float("inf")
+
         diagnostics.append({
             "layer":            layer_idx,
             "cos_mu_pos_mu_neg": round(cos_mu, 4),
             "raw_diff_norm":    round(raw_diff_norm, 4),
+            "sigma_pos":        round(sigma_pos, 4),
+            "sigma_neg":        round(sigma_neg, 4),
+            "snr":              round(snr, 4),
             "mu_pos_norm":      round(mu_pos_norm, 4),
             "mu_neg_norm":      round(mu_neg_norm, 4),
         })
@@ -207,8 +223,9 @@ def main():
             f"  vector geometry: "
             f"cos(μ_p,μ_n)={cos_mu:+.4f}  "
             f"||μ_p−μ_n||={raw_diff_norm:.3f}  "
-            f"||μ_p||={mu_pos_norm:.2f}  "
-            f"||μ_n||={mu_neg_norm:.2f}"
+            f"σ_p={sigma_pos:.3f}  σ_n={sigma_neg:.3f}  "
+            f"SNR={snr:.3f}  "
+            f"||μ_p||={mu_pos_norm:.2f}  ||μ_n||={mu_neg_norm:.2f}"
         )
 
         vec = dim.compute_steering_vector(normalize=s.normalize_vector, norm_type=s.norm_type)
@@ -260,11 +277,27 @@ def main():
     print("VECTOR DIAGNOSTICS  (per layer, before unit-normalization)")
     print("═" * 78)
     print(
-        "  cos(μ_p,μ_n) near 1  → pos and neg activation clusters overlap;"
-        " unit-norm of their diff amplifies noise."
+        "  cos(μ_p,μ_n) near 1  → pos and neg activation centroids overlap in direction."
     )
     print(
-        "  raw_diff_norm small  → little real signal in the residual to begin with."
+        "  raw_diff_norm        → between-class separation (centroid-to-centroid distance)."
+    )
+    print(
+        "  σ_p, σ_n             → within-class spread (mean distance of each activation"
+        " from its class centroid)."
+    )
+    print(
+        "  SNR = raw_diff_norm / √((σ_p² + σ_n²)/2)"
+    )
+    print(
+        "    SNR > 2  → between-class separation comfortably exceeds within-class noise."
+        " DIM direction is meaningful."
+    )
+    print(
+        "    SNR ≈ 1  → ambiguous; means may be sampling artifact in a 4096-dim space."
+    )
+    print(
+        "    SNR < 1  → within-class spread dominates; DIM is mostly noise."
     )
     with pd.option_context("display.float_format", lambda x: f"{x:+.4f}",
                            "display.max_columns", None, "display.width", 200):
