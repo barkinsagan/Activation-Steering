@@ -56,6 +56,24 @@ def _project(acts: List[torch.Tensor], vec: torch.Tensor) -> List[float]:
     return (stacked @ v).tolist()             # [N]
 
 
+def _project_cosine(acts: List[torch.Tensor], vec: torch.Tensor) -> List[float]:
+    """Cosine-similarity projection of each activation onto vec.
+
+    Removes the activation-norm confound: dot product grows with ||act||,
+    cosine does not. Useful for comparing across layers where activation
+    magnitudes differ.
+    """
+    stacked = torch.stack(acts).float()       # [N, H]
+    v = vec.float()                            # [H]
+    return torch.nn.functional.cosine_similarity(stacked, v.unsqueeze(0), dim=-1).tolist()
+
+
+def _activation_norms(acts: List[torch.Tensor]) -> List[float]:
+    """L2 norm of each activation. Used to expose layer-wise norm growth."""
+    stacked = torch.stack(acts).float()
+    return stacked.norm(dim=-1).tolist()
+
+
 def _stats(values: List[float]) -> Tuple[float, float, float, float]:
     t = torch.tensor(values)
     return (
@@ -148,6 +166,7 @@ def main():
 
     # ------------------------------------------------------------------ sweep
     records = []
+    diagnostics = []   # Per-layer vector geometry: cos(μ_p,μ_n), raw diff norm, etc.
 
     for layer_idx in layers:
         layer_name = s.layer_pattern.format(layer_idx=layer_idx)
@@ -164,55 +183,151 @@ def main():
         # Compute DIM vector from pos/neg capture sets
         dim.capture_positive_activations(pos_prompts)
         dim.capture_negative_activations(neg_prompts)
+
+        # ── Vector diagnostics: compute BEFORE the probe loop overwrites the
+        #    activation buffers. These answer: are μ_pos and μ_neg already close
+        #    at this layer? Is the raw diff small (so unit-norm amplifies noise)?
+        mu_pos_raw = torch.stack(dim.positive_activations).float().mean(dim=0)
+        mu_neg_raw = torch.stack(dim.negative_activations).float().mean(dim=0)
+        diff_raw = mu_pos_raw - mu_neg_raw
+        cos_mu = torch.nn.functional.cosine_similarity(
+            mu_pos_raw.unsqueeze(0), mu_neg_raw.unsqueeze(0)
+        ).item()
+        mu_pos_norm = mu_pos_raw.norm().item()
+        mu_neg_norm = mu_neg_raw.norm().item()
+        raw_diff_norm = diff_raw.norm().item()
+        diagnostics.append({
+            "layer":            layer_idx,
+            "cos_mu_pos_mu_neg": round(cos_mu, 4),
+            "raw_diff_norm":    round(raw_diff_norm, 4),
+            "mu_pos_norm":      round(mu_pos_norm, 4),
+            "mu_neg_norm":      round(mu_neg_norm, 4),
+        })
+        print(
+            f"  vector geometry: "
+            f"cos(μ_p,μ_n)={cos_mu:+.4f}  "
+            f"||μ_p−μ_n||={raw_diff_norm:.3f}  "
+            f"||μ_p||={mu_pos_norm:.2f}  "
+            f"||μ_n||={mu_neg_norm:.2f}"
+        )
+
         vec = dim.compute_steering_vector(normalize=s.normalize_vector, norm_type=s.norm_type)
         # vec is on CPU (compute_steering_vector calls .cpu() internally)
 
-        # Project each set
+        # Project each set (dot product + cosine similarity, plus activation norm)
         for set_name, prompts in all_sets.items():
             # Reuse capture mechanism to get activations; overwrites stored lists (fine — DIM already computed)
             dim.capture_positive_activations(prompts)
             acts = dim.positive_activations   # list of [H] tensors, on CPU
 
-            projs = _project(acts, vec)
-            mean, std, lo, hi = _stats(projs)
+            projs_dot = _project(acts, vec)
+            projs_cos = _project_cosine(acts, vec)
+            norms     = _activation_norms(acts)
 
-            print(f"  {set_name:35s}  mean={mean:+.4f}  std={std:.4f}  [{lo:+.4f}, {hi:+.4f}]")
+            mean_dot, std_dot, lo_dot, hi_dot = _stats(projs_dot)
+            mean_cos, std_cos, lo_cos, hi_cos = _stats(projs_cos)
+            mean_norm = round(sum(norms) / len(norms), 3)
+
+            print(
+                f"  {set_name:35s}  "
+                f"dot={mean_dot:+.4f}  "
+                f"cos={mean_cos:+.4f}  "
+                f"||act||={mean_norm:.2f}"
+            )
             records.append({
-                "layer":    layer_idx,
-                "dataset":  set_name,
-                "n":        len(projs),
-                "mean":     mean,
-                "std":      std,
-                "min":      lo,
-                "max":      hi,
+                "layer":         layer_idx,
+                "dataset":       set_name,
+                "n":             len(projs_dot),
+                "mean_dot":      mean_dot,
+                "std_dot":       std_dot,
+                "min_dot":       lo_dot,
+                "max_dot":       hi_dot,
+                "mean_cos":      mean_cos,
+                "std_cos":       std_cos,
+                "min_cos":       lo_cos,
+                "max_cos":       hi_cos,
+                "mean_act_norm": mean_norm,
             })
 
         dim.cleanup()
 
     # ------------------------------------------------------------------ summary
     results = pd.DataFrame(records)
+    diag_df = pd.DataFrame(diagnostics)
 
+    # ── Vector geometry per layer ──
     print("\n\n" + "═" * 78)
-    print("SUMMARY TABLE")
+    print("VECTOR DIAGNOSTICS  (per layer, before unit-normalization)")
     print("═" * 78)
-    # Pivot: rows = layer, columns = dataset, values = mean projection
-    pivot = results.pivot(index="layer", columns="dataset", values="mean")
+    print(
+        "  cos(μ_p,μ_n) near 1  → pos and neg activation clusters overlap;"
+        " unit-norm of their diff amplifies noise."
+    )
+    print(
+        "  raw_diff_norm small  → little real signal in the residual to begin with."
+    )
     with pd.option_context("display.float_format", lambda x: f"{x:+.4f}",
                            "display.max_columns", None, "display.width", 200):
-        print(pivot.to_string())
+        print(diag_df.to_string(index=False))
+
+    # ── Dot-product projection table (the original) ──
+    print("\n" + "═" * 78)
+    print("DOT-PRODUCT PROJECTIONS  (act · v_unit)")
+    print("═" * 78)
+    print(
+        "  Mixes alignment with activation magnitude. ||act|| grows with"
+        " layer depth in Llama, so cross-layer comparisons here are inflated."
+    )
+    pivot_dot = results.pivot(index="layer", columns="dataset", values="mean_dot")
+    with pd.option_context("display.float_format", lambda x: f"{x:+.4f}",
+                           "display.max_columns", None, "display.width", 200):
+        print(pivot_dot.to_string())
+
+    # ── Cosine projection table (length-normalized) ──
+    print("\n" + "═" * 78)
+    print("COSINE-SIMILARITY PROJECTIONS  (act · v_unit / ||act||)")
+    print("═" * 78)
+    print(
+        "  Length-normalized: removes the ||act|| confound. If the L20 drift"
+        " disappears here but persists in dot product, the drift was norm growth."
+    )
+    pivot_cos = results.pivot(index="layer", columns="dataset", values="mean_cos")
+    with pd.option_context("display.float_format", lambda x: f"{x:+.4f}",
+                           "display.max_columns", None, "display.width", 200):
+        print(pivot_cos.to_string())
+
+    # ── Mean activation norm per (layer, dataset) ──
+    print("\n" + "═" * 78)
+    print("ACTIVATION NORMS  (mean ||act|| per layer × dataset)")
+    print("═" * 78)
+    print(
+        "  Confirms layer-wise norm growth. If norms grow ~k× across layers,"
+        " expect dot-product magnitudes to grow ~k× too, independent of alignment."
+    )
+    pivot_norm = results.pivot(index="layer", columns="dataset", values="mean_act_norm")
+    with pd.option_context("display.float_format", lambda x: f"{x:.3f}",
+                           "display.max_columns", None, "display.width", 200):
+        print(pivot_norm.to_string())
 
     print(
-        "\nInterpretation:"
-        f"\n  pos capture ({Path(pos_csv).stem}) is the reference — should always score highest."
-        f"\n  neg capture ({Path(neg_csv).stem}) is the reference — should always score lowest."
-        "\n  Probes that cluster with pos → captured same signal as pos."
-        "\n  Probes that cluster with neg → captured same signal as neg."
+        "\nReading the four tables together:"
+        f"\n  pos capture ({Path(pos_csv).stem}) is the reference high."
+        f"\n  neg capture ({Path(neg_csv).stem}) is the reference low."
+        "\n  Probes clustering with pos → same signal as pos."
+        "\n  Probes clustering with neg → same signal as neg."
+        "\n  cos(μ_p,μ_n) trending toward 1 at deep layers + cosine projections"
+        "\n    staying separated → late-layer dot-product drift was norm-driven."
+        "\n  cos(μ_p,μ_n) → 1 + cosine projections also drifting → format/universal"
+        "\n    direction is leaking past the style-matched cancellation."
     )
 
     if args.save:
         args.save.mkdir(parents=True, exist_ok=True)
         results.to_csv(args.save / "dim_projections.csv", index=False)
-        pivot.to_csv(args.save / "dim_projections_pivot.csv")
+        pivot_dot.to_csv(args.save / "dim_projections_dot_pivot.csv")
+        pivot_cos.to_csv(args.save / "dim_projections_cos_pivot.csv")
+        pivot_norm.to_csv(args.save / "activation_norms_pivot.csv")
+        diag_df.to_csv(args.save / "vector_diagnostics.csv", index=False)
         print(f"\nSaved to {args.save}/")
 
     return 0
