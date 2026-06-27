@@ -76,6 +76,19 @@ TOP_K_QUESTIONS = 10
 FOCUS_COEFS = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]
 DRIFT_THRESHOLD = 0.05
 
+# ── Regime / noise thresholds ────────────────────────────────────────────────
+# COLLAPSE_DELTA_THRESHOLD: |Δ-logprob| above this means the steered forward
+# pass is no longer in the linear-response regime — the residual stream has
+# been pushed past saturation and the result reflects model breakage, not
+# steering. Cells flagged out-of-regime are excluded from best/worst rankings
+# and labelled in the report.
+COLLAPSE_DELTA_THRESHOLD = 1.0
+# NOISE_FLOOR: |Δ-logprob| below this is treated as "no movement" for the
+# purpose of mechanism classification and the selectivity-display gate.
+# Otherwise tiny opposite-sign Δs saturate Sel = ±1 and dominate top-K lists
+# without representing a meaningful effect.
+NOISE_FLOOR = 0.01
+
 # Module-level save state — set by run() based on CLI flags
 _OUT_DIR: Optional[Path] = None
 _SHOW: bool = True
@@ -154,13 +167,114 @@ def attach_split(df: pd.DataFrame, exp_root: Path) -> pd.DataFrame:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# REGIME / MECHANISM HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def flag_regime(agg: pd.DataFrame,
+                threshold: float = COLLAPSE_DELTA_THRESHOLD) -> pd.Series:
+    """Boolean Series: True iff cell is in linear-response regime (not collapsed).
+
+    A cell collapses when |Δ-correct| or |Δ-best-wrong| exceeds the threshold.
+    Collapsed cells are dominated by model-breakage noise, not steering signal,
+    so they should be excluded from best/worst rankings and direction tests.
+    """
+    if agg.empty:
+        return pd.Series([], dtype=bool)
+    in_reg = agg["mean_delta_correct"].abs() < threshold
+    if "mean_delta_best_wrong" in agg.columns:
+        # Treat missing Δ-wrong as in-regime (e.g. MCF data without it)
+        dw = agg["mean_delta_best_wrong"].abs().fillna(0.0)
+        in_reg &= dw < threshold
+    return in_reg
+
+
+def classify_mechanism(row, floor: float = NOISE_FLOOR,
+                       collapse: float = COLLAPSE_DELTA_THRESHOLD) -> str:
+    """Categorize a single (layer, coef) cell's steering mechanism.
+
+    Returns one of:
+      collapsed       – out-of-regime, model broken
+      null            – both Δs at noise floor, nothing happened
+      target-aware    – Δ-correct > 0, Δ-wrong < 0 (cleanest)
+      lift-correct    – Δ-correct > 0, Δ-wrong ≈ 0
+      suppress-wrong  – Δ-correct ≈ 0, Δ-wrong < 0
+      sharpening      – both positive, Δ-correct ≥ Δ-wrong (asymmetric lift)
+      both-broken     – both negative (the L31 +1.0 trap; sel > 0 misleading)
+      anti-target     – Δ-correct < 0, Δ-wrong ≥ 0 (or both pos w/ wrong > correct)
+      n/a             – missing data
+    """
+    dc = row.get("mean_delta_correct", float("nan"))
+    dw = row.get("mean_delta_best_wrong", float("nan"))
+    if not (np.isfinite(dc) and np.isfinite(dw)):
+        return "n/a"
+    if abs(dc) > collapse or abs(dw) > collapse:
+        return "collapsed"
+    if abs(dc) < floor and abs(dw) < floor:
+        return "null"
+    # Clean directional cases
+    if dc > floor and dw < -floor:
+        return "target-aware"
+    if dc > floor and abs(dw) <= floor:
+        return "lift-correct"
+    if abs(dc) <= floor and dw < -floor:
+        return "suppress-wrong"
+    if dc < -floor and dw < -floor:
+        return "both-broken"
+    if dc < -floor and dw >= -floor:
+        return "anti-target"
+    if dc > floor and dw > floor:
+        return "sharpening" if dc >= dw else "anti-target"
+    return "mixed"
+
+
+def bh_fdr(pvals: pd.Series, alpha: float = 0.05) -> pd.Series:
+    """Benjamini–Hochberg adjusted p-values for a pandas Series.
+
+    Returns NaN where the input is NaN; the original index is preserved.
+    """
+    out = pd.Series(index=pvals.index, dtype=float)
+    mask = pvals.notna()
+    if not mask.any():
+        return out
+    p = pvals[mask].values
+    m = len(p)
+    order = np.argsort(p)
+    ranked = p[order]
+    adj = ranked * m / (np.arange(m) + 1)
+    # Enforce monotonicity from the largest rank downward
+    adj = np.minimum.accumulate(adj[::-1])[::-1]
+    adj = np.minimum(adj, 1.0)
+    adj_full = np.empty(m)
+    adj_full[order] = adj
+    out.loc[mask[mask].index] = adj_full
+    return out
+
+
+def in_regime_best(agg: pd.DataFrame, value_col: str,
+                   largest: bool = True) -> Optional[pd.Series]:
+    """Return the row with the best (largest/smallest) value_col among in-regime cells.
+
+    Returns None if no in-regime cell exists. The agg DataFrame should already
+    have an `in_regime` column (added by agg_cf_continuous).
+    """
+    if agg.empty or value_col not in agg.columns:
+        return None
+    sub = agg[agg["in_regime"]] if "in_regime" in agg.columns else agg
+    sub = sub.dropna(subset=[value_col])
+    if sub.empty:
+        return None
+    idx = sub[value_col].idxmax() if largest else sub[value_col].idxmin()
+    return sub.loc[idx]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # AGGREGATION
 # ═════════════════════════════════════════════════════════════════════════════
 
 def agg_mcf(mcf: pd.DataFrame) -> pd.DataFrame:
     """Per-(layer, coef) MCF summary."""
     g = mcf.groupby(["layer", "coef"])
-    return g.agg(
+    agg = g.agg(
         accuracy=("correct", "mean"),
         mean_delta_correct=("delta_correct_logprob", "mean"),
         std_delta_correct=("delta_correct_logprob", "std"),
@@ -170,6 +284,9 @@ def agg_mcf(mcf: pd.DataFrame) -> pd.DataFrame:
         pct_rank1=("correct_label_rank", lambda x: (x == 1).mean()),
         n=("correct", "count"),
     ).reset_index()
+    # Regime flag — MCF has no Δ-wrong column, so only the Δ-correct test applies.
+    agg["in_regime"] = flag_regime(agg)
+    return agg
 
 
 def agg_cf_continuous(cf: pd.DataFrame) -> pd.DataFrame:
@@ -284,6 +401,19 @@ def agg_cf_continuous(cf: pd.DataFrame) -> pd.DataFrame:
     except ImportError:
         warnings.warn("scipy not available — skipping Wilcoxon tests")
         agg["wilcoxon_p"] = np.nan
+
+    # Regime + mechanism classification for downstream filters/labels.
+    agg["in_regime"] = flag_regime(agg)
+    agg["mechanism"] = agg.apply(classify_mechanism, axis=1)
+
+    # BH-FDR over all coef≠0 tested cells. Apply to the in-regime subset where
+    # the test is meaningful; collapsed cells get NaN.
+    if "wilcoxon_p" in agg.columns:
+        mask = (agg["coef"] != 0.0) & agg["in_regime"] & agg["wilcoxon_p"].notna()
+        adj = pd.Series(np.nan, index=agg.index)
+        if mask.any():
+            adj.loc[mask] = bh_fdr(agg.loc[mask, "wilcoxon_p"]).values
+        agg["wilcoxon_p_fdr"] = adj
 
     return agg
 
@@ -843,8 +973,13 @@ def _sig(p) -> str:
 
 
 def _best_per_layer(agg: pd.DataFrame, val_col: str = "mean_delta_correct",
-                    pos_only: bool = False) -> pd.DataFrame:
+                    pos_only: bool = False, in_regime_only: bool = True) -> pd.DataFrame:
     sub = agg[agg.coef > 0] if pos_only else agg
+    if in_regime_only and "in_regime" in sub.columns:
+        sub = sub[sub["in_regime"]]
+    if sub.empty:
+        return pd.DataFrame()
+    sub = sub.dropna(subset=[val_col])
     if sub.empty:
         return pd.DataFrame()
     idx = sub.groupby("layer")[val_col].idxmax()
@@ -880,21 +1015,35 @@ def _rpt_overview(exp_root: Path, mcf: pd.DataFrame, cf: pd.DataFrame,
 
 def _rpt_effect(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
     _section_hdr("EFFECT MAGNITUDE — Does steering move logprobs at all?", "1")
+    _rp("  Rankings filter to in-regime cells (|Δ| < "
+        f"{COLLAPSE_DELTA_THRESHOLD:.1f}); collapsed cells are reported separately.")
 
     for agg, mode in [(cf_agg, "CF"), (mcf_agg, "MCF")]:
         if agg.empty:
             continue
         _rp(f"\n  [{mode}]")
 
-        # per-layer best (positive coefs only)
-        best = _best_per_layer(agg, "mean_delta_correct", pos_only=True)
+        # Regime accounting
+        if "in_regime" in agg.columns:
+            n_total = len(agg)
+            n_collapsed = int((~agg["in_regime"]).sum())
+            if n_collapsed:
+                _rp(f"  ⚠  {n_collapsed}/{n_total} cells out-of-regime (collapsed); "
+                    "excluded from rankings below.")
+
+        in_reg = agg[agg["in_regime"]] if "in_regime" in agg.columns else agg
+
+        # per-layer best (positive coefs only, in-regime)
+        best = _best_per_layer(agg, "mean_delta_correct", pos_only=True,
+                               in_regime_only=True)
         if best.empty:
-            continue
+            _rp("  No in-regime +coef cells — vector saturates the model at every layer."); continue
         has_kl = mode == "CF" and "mean_kl_baseline" in agg.columns
-        _rp(f"\n  Per-layer best Δ-correct (best +coef per layer):")
+        has_mech = "mechanism" in agg.columns
+        _rp(f"\n  Per-layer best Δ-correct (best +coef per layer, in-regime):")
         hdr = f"  {'Layer':>5}  {'Best_C':>7}  {'Δ-correct':>10}  {'±std':>6}  {'%Impr':>6}  {'%Hurt':>6}"
-        if has_kl:
-            hdr += f"  {'KL':>6}"
+        if has_kl:   hdr += f"  {'KL':>6}"
+        if has_mech: hdr += f"  Mechanism"
         _rp(hdr)
         _hr("·")
         for _, row in best.iterrows():
@@ -906,27 +1055,46 @@ def _rpt_effect(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
                     f"{row.get('pct_hurt', float('nan')):>5.0%}")
             if has_kl:
                 line += f"  {_fv(row.get('mean_kl_baseline', float('nan')), '.4f', '   n/a'):>6}"
+            if has_mech:
+                line += f"  {row.get('mechanism', '')}"
             _rp(line)
 
-        # top-5 cells overall
-        top5 = agg.nlargest(5, "mean_delta_correct")
-        _rp(f"\n  Top 5 cells by Δ-correct:")
-        _rp(f"  {'Rank':>4}  {'Layer':>5}  {'Coef':>6}  {'Δ-correct':>10}  {'%Improved':>10}  {'%Hurt':>6}")
+        # top-5 cells by Δ-correct (in-regime)
+        top5 = in_reg.nlargest(5, "mean_delta_correct")
+        _rp(f"\n  Top 5 cells by Δ-correct (in-regime):")
+        hdr = f"  {'Rank':>4}  {'Layer':>5}  {'Coef':>6}  {'Δ-correct':>10}  {'%Improved':>10}  {'%Hurt':>6}"
+        if has_mech: hdr += "  Mechanism"
+        _rp(hdr)
         _hr("·")
         for rank, (_, row) in enumerate(top5.iterrows(), 1):
-            _rp(f"  {rank:>4}  L{int(row.layer):02d}    "
-                f"{row.coef:+6.2f}  "
-                f"{_fv(row.mean_delta_correct):>10}  "
-                f"{row.get('pct_improved', float('nan')):>9.0%}  "
-                f"{row.get('pct_hurt', float('nan')):>5.0%}")
+            line = (f"  {rank:>4}  L{int(row.layer):02d}    "
+                    f"{row.coef:+6.2f}  "
+                    f"{_fv(row.mean_delta_correct):>10}  "
+                    f"{row.get('pct_improved', float('nan')):>9.0%}  "
+                    f"{row.get('pct_hurt', float('nan')):>5.0%}")
+            if has_mech: line += f"  {row.get('mechanism', '')}"
+            _rp(line)
 
-        best_cell  = agg.loc[agg.mean_delta_correct.idxmax()]
-        worst_cell = agg.loc[agg.mean_delta_correct.idxmin()]
-        _rp()
-        _rp(f"  BEST  cell: L{int(best_cell.layer):02d}, coef={best_cell.coef:+.2f}, "
-            f"Δ={_fv(best_cell.mean_delta_correct)}")
-        _rp(f"  WORST cell: L{int(worst_cell.layer):02d}, coef={worst_cell.coef:+.2f}, "
-            f"Δ={_fv(worst_cell.mean_delta_correct)}")
+        # Magnitude peak vs selectivity peak — distinct concepts, often different cells.
+        if not in_reg.empty:
+            mag_cell = in_reg.loc[in_reg["mean_delta_correct"].idxmax()]
+            _rp()
+            _rp(f"  MAGNITUDE peak (in-regime): "
+                f"L{int(mag_cell.layer):02d}, coef={mag_cell.coef:+.2f}, "
+                f"Δ={_fv(mag_cell.mean_delta_correct)}")
+            if "selectivity_index" in in_reg.columns:
+                meaningful = in_reg[in_reg["mean_delta_correct"].abs() >= NOISE_FLOOR]
+                if not meaningful.empty:
+                    sel_cell = meaningful.loc[meaningful["selectivity_index"].idxmax()]
+                    _rp(f"  SELECTIVITY peak (in-regime, |Δc|≥{NOISE_FLOOR}): "
+                        f"L{int(sel_cell.layer):02d}, coef={sel_cell.coef:+.2f}, "
+                        f"Sel={_fv(sel_cell.selectivity_index, '+.3f')}, "
+                        f"Δc={_fv(sel_cell.mean_delta_correct)}, "
+                        f"Δw={_fv(sel_cell.get('mean_delta_best_wrong', float('nan')))}")
+            worst_cell = in_reg.loc[in_reg["mean_delta_correct"].idxmin()]
+            _rp(f"  WORST cell  (in-regime): "
+                f"L{int(worst_cell.layer):02d}, coef={worst_cell.coef:+.2f}, "
+                f"Δ={_fv(worst_cell.mean_delta_correct)}")
         _rp()
 
 
@@ -938,7 +1106,10 @@ def _rpt_coef_sweeps(cf_agg: pd.DataFrame):
         _rp("  [no CF data]")
         return
 
-    layer_eff = cf_agg.groupby("layer")["mean_delta_correct"].apply(lambda x: x.abs().max())
+    # Pick top-4 layers from in-regime cells so collapse layers don't dominate.
+    in_reg = cf_agg[cf_agg["in_regime"]] if "in_regime" in cf_agg.columns else cf_agg
+    layer_pool = in_reg if not in_reg.empty else cf_agg
+    layer_eff = layer_pool.groupby("layer")["mean_delta_correct"].apply(lambda x: x.abs().max())
     top4      = layer_eff.nlargest(4).index.tolist()
     all_layers = sorted(cf_agg.layer.unique())
     key_layers = sorted(set(top4 + [all_layers[0], all_layers[-1]]))
@@ -978,24 +1149,30 @@ def _rpt_selectivity(cf_agg: pd.DataFrame):
     _section_hdr("TARGET-AWARE SELECTIVITY — Does steering help correct more than wrong?", "3")
     _rp("  Selectivity = (Δcorrect − Δbest-wrong) / (|Δcorrect| + |Δbest-wrong|)")
     _rp("    +1.0 = perfectly target-aware   0.0 = uniform shift   −1.0 = anti-target")
+    _rp(f"  Filtered: in-regime cells only (|Δ| < {COLLAPSE_DELTA_THRESHOLD:.1f}).")
+    _rp(f"  Top-K rankings additionally require |Δ-correct| ≥ {NOISE_FLOOR} so that")
+    _rp(f"  cells with Sel≈±1 driven by noise-floor Δs do not dominate.")
     _rp()
 
     if cf_agg.empty or "selectivity_index" not in cf_agg.columns:
         _rp("  [no selectivity data]")
         return
 
-    # Per-layer summary (positive coefs only)
-    pos = cf_agg[cf_agg.coef > 0]
+    in_reg = cf_agg[cf_agg["in_regime"]] if "in_regime" in cf_agg.columns else cf_agg
+
+    # Per-layer summary (positive coefs only, in-regime only)
+    pos = in_reg[in_reg.coef > 0]
     if not pos.empty:
         per_layer_sel = pos.groupby("layer").agg(
             mean_sel=("selectivity_index", "mean"),
             max_sel=("selectivity_index", "max"),
+            mean_dc=("mean_delta_correct", "mean"),
         ).reset_index()
         best_coef_map = (pos.loc[pos.groupby("layer")["selectivity_index"].idxmax()]
                          .set_index("layer")["coef"])
         per_layer_sel["best_coef"] = per_layer_sel["layer"].map(best_coef_map)
 
-        _rp("  Per-layer selectivity (averaged over positive coefs):")
+        _rp("  Per-layer selectivity (averaged over positive coefs, in-regime):")
         _rp(f"  {'Layer':>5}  {'Mean Sel':>9}  {'Max Sel':>8}  {'BestCoef':>9}  Interpretation")
         _hr("·")
         for _, row in per_layer_sel.sort_values("layer").iterrows():
@@ -1010,13 +1187,31 @@ def _rpt_selectivity(cf_agg: pd.DataFrame):
                 f"{row.best_coef:>+9.2f}  "
                 f"{interp}")
 
-    # Top-10 cells by selectivity
+    # Mechanism count summary — gives readers the shape of the productive-band
+    # without forcing them to eyeball every layer.
+    if "mechanism" in in_reg.columns:
+        _rp()
+        mech_counts = in_reg[in_reg.coef > 0]["mechanism"].value_counts()
+        _rp("  Mechanism mix across positive-coef in-regime cells:")
+        for mech in ["target-aware", "lift-correct", "suppress-wrong",
+                     "sharpening", "null", "anti-target", "both-broken", "mixed"]:
+            c = int(mech_counts.get(mech, 0))
+            if c:
+                _rp(f"    {mech:>16}: {c}")
+
+    # Top-10 cells by selectivity — gated to meaningful Δ-correct so noise-saturated
+    # Sel = +1 cells don't dominate the list.
     _rp()
-    has_wp = "wilcoxon_p" in cf_agg.columns
-    top10 = cf_agg[cf_agg.coef != 0.0].nlargest(10, "selectivity_index")
-    _rp("  Top 10 cells by selectivity index:")
+    has_wp  = "wilcoxon_p" in cf_agg.columns
+    has_fdr = "wilcoxon_p_fdr" in cf_agg.columns
+    meaningful = in_reg[(in_reg.coef != 0.0)
+                        & (in_reg["mean_delta_correct"].abs() >= NOISE_FLOOR)]
+    top10 = meaningful.nlargest(10, "selectivity_index")
+    _rp(f"  Top 10 cells by selectivity index (in-regime, |Δc|≥{NOISE_FLOOR}):")
     hdr = f"  {'Rank':>4}  {'Layer':>5}  {'Coef':>6}  {'Selectiv':>8}  {'Δ-correct':>10}  {'Δ-wrong':>8}"
-    if has_wp: hdr += f"  {'p-val':>7}  sig"
+    if has_wp:  hdr += f"  {'p-val':>7}  sig"
+    if has_fdr: hdr += f"  {'p-fdr':>6}"
+    hdr += "  Mechanism"
     _rp(hdr)
     _hr("·")
     for rank, (_, row) in enumerate(top10.iterrows(), 1):
@@ -1028,69 +1223,155 @@ def _rpt_selectivity(cf_agg: pd.DataFrame):
         if has_wp:
             p = row.get("wilcoxon_p", float("nan"))
             line += f"  {_fv(p, '.4f', '   n/a'):>7}  {_sig(p)}"
+        if has_fdr:
+            q = row.get("wilcoxon_p_fdr", float("nan"))
+            line += f"  {_fv(q, '.4f', '   n/a'):>6}"
+        line += f"  {row.get('mechanism', '')}"
         _rp(line)
 
-    # Wilcoxon significant cells
+    # Wilcoxon significant cells (raw + FDR) — restricted to in-regime
     _rp()
     if has_wp:
-        sig = cf_agg[(cf_agg.coef != 0.0) & (cf_agg.wilcoxon_p < 0.05)].sort_values("wilcoxon_p")
-        _rp(f"  STATISTICALLY SIGNIFICANT CELLS (Wilcoxon p < 0.05)  — n={len(sig)}:")
+        sig_pool = cf_agg[(cf_agg.coef != 0.0) & cf_agg["in_regime"]]
+        sig = sig_pool[sig_pool.wilcoxon_p < 0.05].sort_values("wilcoxon_p")
+        n_fdr_sig = int((sig_pool["wilcoxon_p_fdr"] < 0.05).sum()) if has_fdr else None
+        hdr_line = (f"  STATISTICALLY SIGNIFICANT CELLS (Wilcoxon p<0.05, in-regime)  "
+                    f"— n={len(sig)}")
+        if has_fdr:
+            hdr_line += f"   (BH-FDR q<0.05: n={n_fdr_sig})"
+        _rp(hdr_line + ":")
         if sig.empty:
             _rp("    None — no cell shows target-aware effect at p<0.05")
         else:
-            _rp(f"  {'Layer':>5}  {'Coef':>6}  {'p-value':>8}  sig  {'Selectiv':>8}  "
-                f"{'Δ-correct':>10}  {'Δ-wrong':>8}")
+            cols = f"  {'Layer':>5}  {'Coef':>6}  {'p-value':>8}  sig  "
+            if has_fdr: cols += f"{'p-fdr':>6}  "
+            cols += f"{'Selectiv':>8}  {'Δ-correct':>10}  {'Δ-wrong':>8}  Mechanism"
+            _rp(cols)
             _hr("·")
             for _, row in sig.iterrows():
                 p = row.wilcoxon_p
-                _rp(f"  L{int(row.layer):02d}    "
-                    f"{row.coef:+6.2f}  "
-                    f"{p:>8.4f}  {_sig(p)}  "
-                    f"{_fv(row.selectivity_index, '+.3f'):>8}  "
-                    f"{_fv(row.mean_delta_correct):>10}  "
-                    f"{_fv(row.get('mean_delta_best_wrong', float('nan'))):>8}")
+                line = (f"  L{int(row.layer):02d}    "
+                        f"{row.coef:+6.2f}  "
+                        f"{p:>8.4f}  {_sig(p)}  ")
+                if has_fdr:
+                    q = row.get("wilcoxon_p_fdr", float("nan"))
+                    line += f"{_fv(q, '.4f', '   n/a'):>6}  "
+                line += (f"{_fv(row.selectivity_index, '+.3f'):>8}  "
+                         f"{_fv(row.mean_delta_correct):>10}  "
+                         f"{_fv(row.get('mean_delta_best_wrong', float('nan'))):>8}  "
+                         f"{row.get('mechanism', '')}")
+                _rp(line)
         _rp()
+
+        # Cluster summary — significant cells tend to cluster in adjacent
+        # layers/coefs. Random false positives wouldn't; this is the real
+        # evidence beyond raw counts.
+        if not sig.empty:
+            _rp("  Significant-cell clusters by layer (raw p<0.05, in-regime):")
+            cluster = (sig.groupby("layer")
+                       .agg(n_sig=("coef", "size"),
+                            coef_min=("coef", "min"),
+                            coef_max=("coef", "max"),
+                            min_p=("wilcoxon_p", "min"))
+                       .reset_index().sort_values("layer"))
+            _rp(f"  {'Layer':>5}  {'N sig':>5}  {'Coef range':>14}  {'min p':>7}")
+            _hr("·")
+            for _, row in cluster.iterrows():
+                _rp(f"  L{int(row.layer):02d}    {int(row.n_sig):>5}  "
+                    f"{row.coef_min:+6.2f}..{row.coef_max:+6.2f}  "
+                    f"{row.min_p:>7.4f}")
+            _rp()
 
 
 def _rpt_directionality(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
-    _section_hdr("DIRECTIONALITY — Does the sign of the coefficient matter?", "4")
-    _rp("  +coef and −coef produce OPPOSITE Δ → vector is directional (encodes domain)")
-    _rp("  +coef and −coef produce SAME-SIGN Δ → vector captures universal direction")
+    _section_hdr("DIRECTIONALITY — Matched ±coef at sweet-spot magnitudes", "4")
+    _rp("  Per layer, we pick the best +coef cell (in-regime, |Δc| ≥ noise floor)")
+    _rp("  and compare it to the same |coef| on the −coef side.")
+    _rp("  Directional vector  → +coef helps correct, −coef hurts correct (opposite Δc signs).")
+    _rp("  Universal direction → +coef and −coef move Δc the same way (same-sign).")
+    _rp("  Cells where either side falls outside the linear-response regime are skipped —")
+    _rp("  comparing at coef=±4 in early layers measures model collapse, not direction.")
     _rp()
 
     for agg, mode in [(cf_agg, "CF"), (mcf_agg, "MCF")]:
         if agg.empty:
             continue
-        max_pos_c = agg[agg.coef > 0]["coef"].max() if (agg.coef > 0).any() else None
-        min_neg_c = agg[agg.coef < 0]["coef"].min() if (agg.coef < 0).any() else None
-        if max_pos_c is None or min_neg_c is None:
+
+        _rp(f"  [{mode}]")
+
+        # Build per-layer sweet-spot |coef| from the +coef side.
+        in_reg = agg[agg["in_regime"]] if "in_regime" in agg.columns else agg
+        meaningful_pos = in_reg[(in_reg.coef > 0)
+                                & (in_reg["mean_delta_correct"].abs() >= NOISE_FLOOR)]
+        if meaningful_pos.empty:
+            _rp("    No in-regime +coef cells with meaningful Δ-correct to anchor.")
+            _rp()
             continue
 
-        _rp(f"  [{mode}]  coef={max_pos_c:+.2f} vs coef={min_neg_c:+.2f}")
-        _rp(f"  {'Layer':>5}  {'Δ@+coef':>9}  {'Δ@-coef':>9}  {'Opp.signs':>9}  Note")
+        # Selectivity preferred when available; else fall back to Δ-correct.
+        rank_col = "selectivity_index" if "selectivity_index" in meaningful_pos.columns else "mean_delta_correct"
+        sweet_pos = meaningful_pos.loc[
+            meaningful_pos.groupby("layer")[rank_col].idxmax()
+        ]
+
+        has_sel = "selectivity_index" in agg.columns
+        hdr = f"  {'Layer':>5}  {'|coef|':>7}  {'Δc@+':>9}  {'Δc@−':>9}  {'Δw@+':>9}  {'Δw@−':>9}  Direction"
+        _rp(hdr)
         _hr("·")
 
-        pos_vals = agg[agg.coef == max_pos_c].set_index("layer")["mean_delta_correct"]
-        neg_vals = agg[agg.coef == min_neg_c].set_index("layer")["mean_delta_correct"]
-        layers   = sorted(set(pos_vals.index) | set(neg_vals.index))
+        n_dir = n_universal = n_skip = 0
+        for _, prow in sweet_pos.sort_values("layer").iterrows():
+            c_pos = prow.coef
+            c_neg = -c_pos
+            layer = int(prow.layer)
+            # Find matched −coef row
+            neg_match = agg[(agg.layer == prow.layer) & (np.isclose(agg.coef, c_neg))]
+            if neg_match.empty:
+                _rp(f"  L{layer:02d}    {c_pos:>+7.2f}    "
+                    f"{'n/a':>9}    {'n/a':>9}    {'n/a':>9}    {'n/a':>9}  no matched −coef in grid")
+                n_skip += 1
+                continue
+            nrow = neg_match.iloc[0]
 
-        n_dir = 0
-        for layer in layers:
-            p = pos_vals.get(layer, float("nan"))
-            n = neg_vals.get(layer, float("nan"))
-            if not (np.isnan(p) or np.isnan(n)) and p * n < 0:
-                opp, note, n_dir = "YES ✓", "", n_dir + 1
-            elif np.isnan(p) or np.isnan(n):
-                opp, note = "n/a", ""
-            elif p > 0 and n > 0:
-                opp, note = "no", "both positive → universal+ direction"
+            # Skip if matched −coef out-of-regime — comparing would measure collapse.
+            if "in_regime" in nrow.index and not bool(nrow["in_regime"]):
+                _rp(f"  L{layer:02d}    {c_pos:>+7.2f}    "
+                    f"{_fv(prow.mean_delta_correct):>9}  {_fv(nrow.mean_delta_correct):>9}  "
+                    f"{_fv(prow.get('mean_delta_best_wrong', float('nan'))):>9}  "
+                    f"{_fv(nrow.get('mean_delta_best_wrong', float('nan'))):>9}  "
+                    f"−coef collapsed (skip)")
+                n_skip += 1
+                continue
+
+            dc_p, dc_n = prow.mean_delta_correct, nrow.mean_delta_correct
+            dw_p = prow.get("mean_delta_best_wrong", float("nan"))
+            dw_n = nrow.get("mean_delta_best_wrong", float("nan"))
+
+            # Need both effects above noise to call directionality
+            if abs(dc_p) < NOISE_FLOOR and abs(dc_n) < NOISE_FLOOR:
+                verdict = "null (both noise)"
+            elif dc_p * dc_n < 0:
+                verdict = "DIRECTIONAL ✓"
+                n_dir += 1
+            elif dc_p > 0 and dc_n > 0:
+                verdict = "universal+ (sharpening)"
+                n_universal += 1
+            elif dc_p < 0 and dc_n < 0:
+                verdict = "both negative (damage)"
+                n_universal += 1
             else:
-                opp, note = "no", "both negative → universal− direction"
-            _rp(f"  L{layer:02d}    "
-                f"{_fv(p):>9}  {_fv(n):>9}  {opp:>9}  {note}")
+                verdict = "mixed"
 
-        _rp(f"\n  Directional at {n_dir}/{len(layers)} layers "
-            f"({100 * n_dir / max(len(layers), 1):.0f}%)")
+            _rp(f"  L{layer:02d}    {c_pos:>+7.2f}    "
+                f"{_fv(dc_p):>9}  {_fv(dc_n):>9}  "
+                f"{_fv(dw_p):>9}  {_fv(dw_n):>9}  "
+                f"{verdict}")
+
+        n_total = len(sweet_pos)
+        _rp()
+        _rp(f"  Summary: directional at {n_dir}/{n_total} layers "
+            f"({100 * n_dir / max(n_total, 1):.0f}%), "
+            f"universal at {n_universal}, skipped {n_skip}.")
         _rp()
 
 
@@ -1196,75 +1477,109 @@ def _rpt_verdict(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
         _rp("  No data — cannot produce verdict.")
         return
 
+    in_reg = agg[agg["in_regime"]] if "in_regime" in agg.columns else agg
     findings = []
 
-    # 1. Effect size
-    max_eff  = agg["mean_delta_correct"].abs().max()
-    best_c   = agg.loc[agg["mean_delta_correct"].abs().idxmax()]
-    eff_desc = ("negligible (<0.05)" if max_eff < 0.05 else
-                "small (0.05–0.2)"  if max_eff < 0.2  else
-                "moderate (0.2–0.5)" if max_eff < 0.5 else "large (>0.5)")
-    findings.append(
-        f"EFFECT SIZE: {eff_desc} — max |Δ-correct| = {max_eff:.3f} "
-        f"at L{int(best_c.layer):02d}, coef={best_c.coef:+.2f}."
-    )
-
-    # 2. Selectivity
-    if not cf_agg.empty and "selectivity_index" in cf_agg.columns:
-        pos_sel  = cf_agg[cf_agg.coef > 0]["selectivity_index"]
-        mean_sel = pos_sel.mean()
-        max_sel  = pos_sel.max()
-        best_sel = cf_agg.loc[cf_agg.selectivity_index.idxmax()]
-        if mean_sel > 0.1:
-            desc = f"positive (mean={mean_sel:+.3f}) — steering is target-aware"
-        elif mean_sel > 0:
-            desc = f"weakly positive (mean={mean_sel:+.3f}) — marginal target-awareness"
-        elif mean_sel > -0.05:
-            desc = f"near-zero (mean={mean_sel:+.3f}) — uniform probability redistribution"
-        else:
-            desc = f"negative (mean={mean_sel:+.3f}) — anti-target effect"
+    # 1. Effect size (in-regime; collapse cells exaggerate max)
+    if not in_reg.empty:
+        max_eff = in_reg["mean_delta_correct"].abs().max()
+        best_c  = in_reg.loc[in_reg["mean_delta_correct"].abs().idxmax()]
+        eff_desc = ("negligible (<0.05)" if max_eff < 0.05 else
+                    "small (0.05–0.2)"  if max_eff < 0.2  else
+                    "moderate (0.2–0.5)" if max_eff < 0.5 else "large (>0.5)")
+        n_oor = int((~agg["in_regime"]).sum()) if "in_regime" in agg.columns else 0
+        oor_note = f" ({n_oor} cells out-of-regime, excluded)" if n_oor else ""
         findings.append(
-            f"SELECTIVITY: {desc}. "
-            f"Max={max_sel:+.3f} at L{int(best_sel.layer):02d}, coef={best_sel.coef:+.2f}."
+            f"EFFECT SIZE (in-regime): {eff_desc} — max |Δ-correct| = {max_eff:.3f} "
+            f"at L{int(best_c.layer):02d}, coef={best_c.coef:+.2f}.{oor_note}"
         )
 
-    # 3. Statistical significance
+    # 2. Selectivity — split magnitude vs selectivity peak
+    if not cf_agg.empty and "selectivity_index" in cf_agg.columns:
+        cf_in_reg = cf_agg[cf_agg["in_regime"]]
+        pos_sel  = cf_in_reg[cf_in_reg.coef > 0]["selectivity_index"]
+        mean_sel = pos_sel.mean() if not pos_sel.empty else float("nan")
+        meaningful = cf_in_reg[cf_in_reg["mean_delta_correct"].abs() >= NOISE_FLOOR]
+        if not meaningful.empty:
+            best_sel = meaningful.loc[meaningful["selectivity_index"].idxmax()]
+            mag_cell = cf_in_reg.loc[cf_in_reg["mean_delta_correct"].idxmax()]
+            if mean_sel > 0.1:
+                desc = f"positive (mean={mean_sel:+.3f}) — steering is target-aware"
+            elif mean_sel > 0:
+                desc = f"weakly positive (mean={mean_sel:+.3f}) — marginal target-awareness"
+            elif mean_sel > -0.05:
+                desc = f"near-zero (mean={mean_sel:+.3f}) — uniform probability redistribution"
+            else:
+                desc = f"negative (mean={mean_sel:+.3f}) — anti-target effect"
+            findings.append(
+                f"SELECTIVITY: {desc}. "
+                f"Magnitude peak: L{int(mag_cell.layer):02d}, "
+                f"coef={mag_cell.coef:+.2f}, Δc={mag_cell.mean_delta_correct:+.3f}. "
+                f"Selectivity peak: L{int(best_sel.layer):02d}, "
+                f"coef={best_sel.coef:+.2f}, Sel={best_sel.selectivity_index:+.3f}, "
+                f"Δc={best_sel.mean_delta_correct:+.3f}."
+            )
+
+    # 3. Statistical significance — raw + FDR, restricted to in-regime
     if not cf_agg.empty and "wilcoxon_p" in cf_agg.columns:
-        sig05 = cf_agg[(cf_agg.coef != 0.0) & (cf_agg.wilcoxon_p < 0.05)]
-        sig01 = cf_agg[(cf_agg.coef != 0.0) & (cf_agg.wilcoxon_p < 0.01)]
+        pool = cf_agg[(cf_agg.coef != 0.0) & cf_agg["in_regime"]]
+        sig05 = pool[pool.wilcoxon_p < 0.05]
+        sig01 = pool[pool.wilcoxon_p < 0.01]
+        fdr_sig = pool[pool.get("wilcoxon_p_fdr", pd.Series(np.nan)) < 0.05] \
+                  if "wilcoxon_p_fdr" in pool.columns else pd.DataFrame()
         if len(sig05) == 0:
             findings.append(
-                "SIGNIFICANCE: No cells significant at p<0.05 — "
+                "SIGNIFICANCE: No in-regime cells significant at p<0.05 — "
                 "target-aware effect is not statistically confirmed."
             )
         else:
             best_sig = sig05.loc[sig05.wilcoxon_p.idxmin()]
+            line = (f"SIGNIFICANCE: {len(sig05)} in-regime cells at raw p<0.05, "
+                    f"{len(sig01)} at p<0.01")
+            if not fdr_sig.empty or "wilcoxon_p_fdr" in pool.columns:
+                line += f", {len(fdr_sig)} surviving BH-FDR q<0.05"
+            line += (f". Most significant: L{int(best_sig.layer):02d}, "
+                     f"coef={best_sig.coef:+.2f}, p={best_sig.wilcoxon_p:.4f}.")
+            findings.append(line)
+
+    # 4. Best layer band (in-regime)
+    if not in_reg.empty:
+        top5_layers = (in_reg.groupby("layer")["mean_delta_correct"]
+                       .apply(lambda x: x.abs().max())
+                       .nlargest(5).index.tolist())
+        findings.append(f"BEST LAYERS: {sorted(top5_layers)} — top-5 by max |Δ-correct| (in-regime).")
+
+    # 5. Directionality — matched sweet-spot ±coef, not coef=±max
+    if not in_reg.empty and (in_reg.coef > 0).any() and (in_reg.coef < 0).any():
+        # Replicate the matched-pair logic from _rpt_directionality, summarised.
+        meaningful_pos = in_reg[(in_reg.coef > 0)
+                                & (in_reg["mean_delta_correct"].abs() >= NOISE_FLOOR)]
+        rank_col = "selectivity_index" if "selectivity_index" in meaningful_pos.columns else "mean_delta_correct"
+        if not meaningful_pos.empty:
+            sweet = meaningful_pos.loc[
+                meaningful_pos.groupby("layer")[rank_col].idxmax()
+            ]
+            n_dir = n_tot = 0
+            for _, prow in sweet.iterrows():
+                neg = agg[(agg.layer == prow.layer)
+                          & (np.isclose(agg.coef, -prow.coef))]
+                if neg.empty:
+                    continue
+                nrow = neg.iloc[0]
+                if "in_regime" in nrow.index and not bool(nrow["in_regime"]):
+                    continue
+                if abs(prow.mean_delta_correct) < NOISE_FLOOR \
+                   and abs(nrow.mean_delta_correct) < NOISE_FLOOR:
+                    continue
+                n_tot += 1
+                if prow.mean_delta_correct * nrow.mean_delta_correct < 0:
+                    n_dir += 1
+            pct = 100 * n_dir / max(n_tot, 1)
+            desc = ("strong" if pct > 70 else "mixed" if pct > 40 else "weak")
             findings.append(
-                f"SIGNIFICANCE: {len(sig05)} cells at p<0.05, {len(sig01)} at p<0.01. "
-                f"Most significant: L{int(best_sig.layer):02d}, coef={best_sig.coef:+.2f}, "
-                f"p={best_sig.wilcoxon_p:.4f}."
+                f"DIRECTIONALITY (matched ±coef at sweet spot): {desc} — "
+                f"{n_dir}/{n_tot} testable layers ({pct:.0f}%) show opposite-sign Δ-correct."
             )
-
-    # 4. Best layer band
-    top5_layers = (agg.groupby("layer")["mean_delta_correct"]
-                   .apply(lambda x: x.abs().max())
-                   .nlargest(5).index.tolist())
-    findings.append(f"BEST LAYERS: {sorted(top5_layers)} — top-5 by max |Δ-correct|.")
-
-    # 5. Directionality
-    if (agg.coef > 0).any() and (agg.coef < 0).any():
-        max_pc = agg[agg.coef > 0]["coef"].max()
-        min_nc = agg[agg.coef < 0]["coef"].min()
-        pv = agg[agg.coef == max_pc]["mean_delta_correct"].values
-        nv = agg[agg.coef == min_nc]["mean_delta_correct"].values
-        n_dir = int((pv * nv < 0).sum())
-        n_tot = len(pv)
-        pct   = 100 * n_dir / max(n_tot, 1)
-        desc  = ("strong" if pct > 70 else "mixed" if pct > 40 else "weak")
-        findings.append(
-            f"DIRECTIONALITY: {desc} — {n_dir}/{n_tot} layers ({pct:.0f}%) show "
-            "opposite sign at +coef vs −coef."
-        )
 
     _rp()
     for i, f in enumerate(findings, 1):
@@ -1310,8 +1625,13 @@ def _rpt_split_comparison(cf: pd.DataFrame, mcf: pd.DataFrame):
         if val_agg.empty:
             _rp("  Validation set empty — cannot select best cells."); continue
 
-        # Top-5 by Δ-correct on validation
-        top5 = val_agg.nlargest(5, "mean_delta_correct")
+        # Top-5 by Δ-correct on validation — restricted to in-regime cells so
+        # collapsed (layer, coef) pairs don't end up selected for the test
+        # generalisation check (they always generalise to test… as collapse).
+        val_in_reg = val_agg[val_agg["in_regime"]] if "in_regime" in val_agg.columns else val_agg
+        if val_in_reg.empty:
+            _rp("  No in-regime validation cells — vector saturates the model everywhere."); continue
+        top5 = val_in_reg.nlargest(5, "mean_delta_correct")
         has_sel = "selectivity_index" in val_agg.columns
         has_wp  = "wilcoxon_p" in val_agg.columns
 
@@ -1375,11 +1695,17 @@ def _rpt_split_comparison(cf: pd.DataFrame, mcf: pd.DataFrame):
             except ImportError:
                 pass
 
-        # Best-layer agreement
-        vbl = int(val_agg.loc[val_agg.mean_delta_correct.idxmax(), "layer"])
-        tbl = int(test_agg.loc[test_agg.mean_delta_correct.idxmax(), "layer"])
-        match = "MATCH ✓" if vbl == tbl else "MISMATCH ✗ (overfitting risk)"
-        _rp(f"  Best layer: val=L{vbl:02d}  test=L{tbl:02d}  →  {match}")
+        # Best-layer agreement — restrict both sides to in-regime so we don't
+        # call out-of-regime collapse cells "best layer" on either split.
+        val_pool  = val_agg[val_agg["in_regime"]]  if "in_regime" in val_agg.columns  else val_agg
+        test_pool = test_agg[test_agg["in_regime"]] if "in_regime" in test_agg.columns else test_agg
+        if val_pool.empty or test_pool.empty:
+            _rp("  Cannot compute best-layer agreement — one side has no in-regime cells.")
+        else:
+            vbl = int(val_pool.loc[val_pool.mean_delta_correct.idxmax(), "layer"])
+            tbl = int(test_pool.loc[test_pool.mean_delta_correct.idxmax(), "layer"])
+            match = "MATCH ✓" if vbl == tbl else "MISMATCH ✗ (overfitting risk)"
+            _rp(f"  Best layer (in-regime): val=L{vbl:02d}  test=L{tbl:02d}  →  {match}")
         _rp()
 
 
@@ -1403,19 +1729,31 @@ def _rpt_crossval(cf: pd.DataFrame, mcf: pd.DataFrame, k: int = 5, n_boot: int =
 
         _rp(f"  [{mode}]")
 
-        # Use validation split for layer/coef selection if available
-        ref_df  = (raw_df[raw_df["split"] == "validation"]
-                   if "split" in raw_df.columns and "validation" in raw_df["split"].values
-                   else raw_df)
-        cv_df   = raw_df   # always CV over all available questions
-        cv_label = ("val+test questions" if "split" in raw_df.columns
-                    and raw_df["split"].notna().any() else "all questions")
+        # Selection-on-validation, CV-on-validation: avoid test contamination.
+        # If no split column, fall back to all data (legacy behaviour).
+        has_split = "split" in raw_df.columns and raw_df["split"].notna().any()
+        if has_split and "validation" in raw_df["split"].values:
+            ref_df = raw_df[raw_df["split"] == "validation"]
+            cv_df  = ref_df
+            cv_label = "validation questions only (test held out)"
+        else:
+            ref_df = raw_df
+            cv_df  = raw_df
+            cv_label = "all questions (no split labels found)"
 
         ref_agg = agg_cf_continuous(ref_df) if mode == "CF" else agg_mcf(ref_df)
         if ref_agg.empty:
             continue
 
-        best_row   = ref_agg.loc[ref_agg["mean_delta_correct"].idxmax()]
+        # In-regime only — otherwise the "best" can be a collapse cell.
+        if "in_regime" in ref_agg.columns:
+            ref_pool = ref_agg[ref_agg["in_regime"]]
+        else:
+            ref_pool = ref_agg
+        if ref_pool.empty:
+            _rp("  No in-regime cells on validation — skipping CV."); continue
+
+        best_row   = ref_pool.loc[ref_pool["mean_delta_correct"].idxmax()]
         best_layer = best_row["layer"]
         best_coef  = best_row["coef"]
 
@@ -1424,8 +1762,8 @@ def _rpt_crossval(cf: pd.DataFrame, mcf: pd.DataFrame, k: int = 5, n_boot: int =
             _rp(f"  Too few questions ({len(cell)}) at L{int(best_layer):02d}, "
                 f"coef={best_coef:+.2f} for {k}-fold CV — skipping"); continue
 
-        _rp(f"  Selected cell (val-best): L{int(best_layer):02d}, coef={best_coef:+.2f}  "
-            f"n={len(cell)} ({cv_label})")
+        _rp(f"  Selected cell (val-best, in-regime): L{int(best_layer):02d}, "
+            f"coef={best_coef:+.2f}  n={len(cell)} ({cv_label})")
         _rp()
 
         has_wrong = (mode == "CF"
@@ -1511,6 +1849,28 @@ def _rpt_crossval(cf: pd.DataFrame, mcf: pd.DataFrame, k: int = 5, n_boot: int =
                 s_concl = ("fully positive → target-aware effect confirmed"
                            if s_lo > 0 else "crosses zero  → selectivity uncertain")
                 _rp(f"    Selectivity    : [{s_lo:+.3f}, {s_hi:+.3f}]  {s_concl}")
+
+        # ── Held-out test sanity ────────────────────────────────────────────
+        # Selection happened on validation; CV and bootstrap above are
+        # validation-only. Report the same cell's mean on the held-out test
+        # set as an out-of-sample sanity check (no contamination).
+        if has_split and "test" in raw_df["split"].values:
+            test_cell = raw_df[(raw_df["layer"] == best_layer)
+                               & (raw_df["coef"] == best_coef)
+                               & (raw_df["split"] == "test")]
+            if not test_cell.empty:
+                td = test_cell[delta_col].dropna().values
+                if len(td) > 0:
+                    val_mean = mn_d
+                    tst_mean = float(td.mean())
+                    diff     = tst_mean - val_mean
+                    drop_frac = abs(diff) / max(abs(val_mean), 1e-9)
+                    note = ("generalises well" if drop_frac < 0.5
+                            else "drops substantially — possible overfitting risk")
+                    _rp()
+                    _rp(f"  Held-out test (same cell, no contamination): "
+                        f"n={len(td)}  Δ-correct={tst_mean:+.3f}  "
+                        f"(val={val_mean:+.3f}, diff={diff:+.3f}) — {note}")
         _rp()
 
 
