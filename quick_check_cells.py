@@ -149,3 +149,105 @@ try:
         print()
 except ImportError:
     print("  scipy not available — skipping t-tests")
+
+
+# ── Section 4: pooled k-fold CV on val+test ──────────────────────────────
+# Workaround for the small-test-set sampling-variance problem identified
+# in the baseline t-test: pool val and test questions, run k-fold CV on the
+# pool. We lose the "true held-out" guarantee, but with σ≈22 on baseline
+# logprobs and test n=25, a single random test draw is too noisy to trust
+# anyway. Pooled CV gives a stable per-cell mean and a fold-stability check.
+K_FOLDS = 5
+N_BOOT  = 1000
+SEED    = 42
+
+print("=" * 84)
+print(f"POOLED CROSS-VALIDATION  (val+test pooled, {K_FOLDS}-fold + bootstrap)")
+print("  Workaround for small-n test set with heterogeneous baselines.")
+print("  Per cell: per-fold Δc, stability check, and bootstrap 95% CI on the")
+print("  pooled-set mean.")
+print("=" * 84)
+print(
+    f"{'cell':>12}  {'fold':>4}  {'n':>3}  {'Dc':>9}  {'Dw':>9}  {'Dc-Dw':>9}"
+)
+print("-" * 84)
+
+rng = np.random.default_rng(SEED)
+
+for layer, coef in CELLS:
+    cell = cf[(cf.layer == layer) & (abs(cf.coef - coef) < 1e-6)]
+    pool = cell[cell.split.isin(["validation", "test"])].copy()
+    if pool.empty:
+        print(f"L{layer:02d} {coef:+.2f}: no val+test data")
+        continue
+
+    qids = pool["question_id"].unique()
+    rng.shuffle(qids)
+    folds = np.array_split(qids, K_FOLDS)
+
+    fold_dc, fold_dw, fold_sel = [], [], []
+    label = f"L{layer:02d} {coef:+.2f}"
+
+    for fi, held in enumerate(folds, 1):
+        f_sub = pool[pool.question_id.isin(held)]
+        dc = f_sub["delta_target_sum_lp"].mean()
+        dw = f_sub["delta_max_wrong_sum_lp"].mean()
+        fold_dc.append(dc)
+        fold_dw.append(dw)
+        fold_sel.append(dc - dw)
+        print(
+            f"{label:>12}  {fi:>4}  {len(f_sub):>3}  "
+            f"{dc:+.4f}  {dw:+.4f}  {dc-dw:+.4f}"
+        )
+
+    # Stability summary
+    mn_dc, sd_dc = float(np.mean(fold_dc)), float(np.std(fold_dc, ddof=1))
+    mn_dw, sd_dw = float(np.mean(fold_dw)), float(np.std(fold_dw, ddof=1))
+    mn_sel       = float(np.mean(fold_sel))
+    n_pos_dc     = sum(d > 0 for d in fold_dc)
+    n_neg_dw     = sum(d < 0 for d in fold_dw)
+    n_pos_sel    = sum(s > 0 for s in fold_sel)
+
+    print(
+        f"{label:>12}  {'mean':>4}        "
+        f"{mn_dc:+.4f}  {mn_dw:+.4f}  {mn_sel:+.4f}"
+    )
+    print(
+        f"{label:>12}  {'std':>4}         "
+        f"{sd_dc:.4f}   {sd_dw:.4f}   {(sd_dc**2 + sd_dw**2)**0.5:.4f}"
+    )
+    print(
+        f"  Fold consistency: Δc>0 in {n_pos_dc}/{K_FOLDS} folds, "
+        f"Δw<0 in {n_neg_dw}/{K_FOLDS}, Δc-Δw>0 in {n_pos_sel}/{K_FOLDS}"
+    )
+
+    # Bootstrap 95% CI on the pooled per-question Δc and Δw
+    dc_arr = pool["delta_target_sum_lp"].dropna().values
+    dw_arr = pool["delta_max_wrong_sum_lp"].dropna().values
+    if len(dc_arr) == 0 or len(dw_arr) == 0:
+        print("  Bootstrap: no data")
+    else:
+        # Use the SAME bootstrap indices for Δc, Δw to preserve per-question pairing
+        boot_dc, boot_dw, boot_sel = [], [], []
+        n = len(dc_arr)
+        for _ in range(N_BOOT):
+            idx = rng.integers(0, n, size=n)
+            boot_dc.append(dc_arr[idx].mean())
+            boot_dw.append(dw_arr[idx].mean())
+            boot_sel.append((dc_arr[idx] - dw_arr[idx]).mean())
+        lo_dc, hi_dc   = np.percentile(boot_dc,  [2.5, 97.5])
+        lo_dw, hi_dw   = np.percentile(boot_dw,  [2.5, 97.5])
+        lo_se, hi_se   = np.percentile(boot_sel, [2.5, 97.5])
+
+        def _verdict(lo: float, hi: float, want_positive: bool) -> str:
+            if lo > 0 and want_positive:  return "fully positive ✓"
+            if hi < 0 and not want_positive: return "fully negative ✓"
+            return "crosses zero"
+
+        print(
+            f"  Bootstrap 95% CI (n_pool={n}, B={N_BOOT}):\n"
+            f"    Δc      : [{lo_dc:+.4f}, {hi_dc:+.4f}]  {_verdict(lo_dc, hi_dc, True)}\n"
+            f"    Δw      : [{lo_dw:+.4f}, {hi_dw:+.4f}]  {_verdict(lo_dw, hi_dw, False)}\n"
+            f"    Δc - Δw : [{lo_se:+.4f}, {hi_se:+.4f}]  {_verdict(lo_se, hi_se, True)}"
+        )
+    print()
