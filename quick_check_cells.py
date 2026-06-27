@@ -1,8 +1,30 @@
+import argparse
+import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-exp = Path("results/exp_20260626_phys_vs_bio_continuous_full")
+DEFAULT_EXP = "results/exp_20260626_phys_vs_bio_continuous_full"
+
+parser = argparse.ArgumentParser(
+    description="Pooled CV + bootstrap quick-check on a steering experiment."
+)
+parser.add_argument(
+    "exp",
+    nargs="?",
+    default=DEFAULT_EXP,
+    help=f"Path to experiment results dir (default: {DEFAULT_EXP})",
+)
+args = parser.parse_args()
+
+exp = Path(args.exp)
+if not exp.exists():
+    sys.exit(f"[!] Experiment dir not found: {exp}")
+if not (exp / "cf").exists():
+    sys.exit(f"[!] No cf/ subdirectory in {exp}; expected per-layer detailed_wide.csv files")
+if not (exp / "split_manifest.csv").exists():
+    sys.exit(f"[!] No split_manifest.csv in {exp}; cannot tag val/test rows")
+print(f"Experiment: {exp}")
 
 # Cells to compare val vs test on Δ-correct / Δ-wrong (kept narrow for table width)
 CELLS = [
