@@ -1273,6 +1273,247 @@ def _rpt_verdict(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
     _hr("═")
 
 
+def _rpt_split_comparison(cf: pd.DataFrame, mcf: pd.DataFrame):
+    """Section 9 — Validation vs test results shown separately."""
+    _section_hdr("VALIDATION vs TEST SET RESULTS", "9")
+
+    has_cf_split  = not cf.empty  and "split" in cf.columns  and cf["split"].notna().any()
+    has_mcf_split = not mcf.empty and "split" in mcf.columns and mcf["split"].notna().any()
+
+    if not has_cf_split and not has_mcf_split:
+        _rp("  split_manifest.csv not found — all questions were pooled.")
+        _rp("  Re-run experiment with a split config to enable this analysis.")
+        return
+
+    for raw_df, mode in [(cf, "CF"), (mcf, "MCF")]:
+        if raw_df.empty or "split" not in raw_df.columns:
+            continue
+        _rp(f"\n  [{mode}]")
+
+        # Aggregate each split independently
+        results: Dict[str, Tuple[pd.DataFrame, int]] = {}
+        for split in ["validation", "test"]:
+            sub = raw_df[raw_df["split"] == split]
+            if sub.empty:
+                continue
+            n_q = int(sub["question_id"].nunique()) if "question_id" in sub.columns else len(sub)
+            agg = agg_cf_continuous(sub) if mode == "CF" else agg_mcf(sub)
+            results[split] = (agg, n_q)
+
+        if not results:
+            _rp("  No split labels found."); continue
+
+        val_agg,  n_val  = results.get("validation", (pd.DataFrame(), 0))
+        test_agg, n_test = results.get("test",       (pd.DataFrame(), 0))
+        _rp(f"  n_validation={n_val}  n_test={n_test}")
+
+        if val_agg.empty:
+            _rp("  Validation set empty — cannot select best cells."); continue
+
+        # Top-5 by Δ-correct on validation
+        top5 = val_agg.nlargest(5, "mean_delta_correct")
+        has_sel = "selectivity_index" in val_agg.columns
+        has_wp  = "wilcoxon_p" in val_agg.columns
+
+        _rp(f"\n  VALIDATION — Top 5 cells by Δ-correct:")
+        hdr = f"  {'Rank':>4}  {'Layer':>5}  {'Coef':>6}  {'Δ-correct':>10}  {'%Impr':>6}"
+        if has_sel: hdr += f"  {'Selectiv':>9}"
+        if has_wp:  hdr += f"  {'p-val':>7}  sig"
+        _rp(hdr); _hr("·")
+
+        for rank, (_, row) in enumerate(top5.iterrows(), 1):
+            line = (f"  {rank:>4}  L{int(row.layer):02d}    "
+                    f"{row.coef:+6.2f}  "
+                    f"{_fv(row.mean_delta_correct):>10}  "
+                    f"{row.get('pct_improved', float('nan')):>5.0%}")
+            if has_sel: line += f"  {_fv(row.get('selectivity_index', float('nan')), '+.3f'):>9}"
+            if has_wp:
+                p = row.get("wilcoxon_p", float("nan"))
+                line += f"  {_fv(p, '.4f', '   n/a'):>7}  {_sig(p)}"
+            _rp(line)
+
+        if test_agg.empty:
+            _rp("\n  Test set empty — no generalisation check possible."); continue
+
+        # For those same validation-best cells, look up test numbers
+        test_idx = test_agg.set_index(["layer", "coef"])
+        _rp(f"\n  TEST SET — same val-selected cells (do they generalise?):")
+        hdr2 = (f"  {'Layer':>5}  {'Coef':>6}  {'Δ-corr(val)':>12}  "
+                f"{'Δ-corr(tst)':>12}  {'Δ-diff':>7}")
+        if has_sel: hdr2 += f"  {'Sel(val)':>9}  {'Sel(tst)':>9}"
+        _rp(hdr2); _hr("·")
+
+        for _, row in top5.iterrows():
+            key = (row.layer, row.coef)
+            try:
+                tr = test_idx.loc[key]
+                diff = tr["mean_delta_correct"] - row["mean_delta_correct"]
+                line = (f"  L{int(row.layer):02d}    {row.coef:+6.2f}  "
+                        f"{_fv(row.mean_delta_correct):>12}  "
+                        f"{_fv(tr['mean_delta_correct']):>12}  "
+                        f"{diff:>+7.3f}")
+                if has_sel:
+                    line += (f"  {_fv(row.get('selectivity_index', float('nan')), '+.3f'):>9}  "
+                             f"{_fv(tr.get('selectivity_index', float('nan')), '+.3f'):>9}")
+            except KeyError:
+                line = (f"  L{int(row.layer):02d}    {row.coef:+6.2f}  "
+                        f"{_fv(row.mean_delta_correct):>12}  {'n/a':>12}  {'n/a':>7}")
+            _rp(line)
+
+        # Layer-sweep correlation: val vs test at the val-best coef
+        val_best_coef = top5.iloc[0]["coef"]
+        v_sweep = val_agg[val_agg.coef == val_best_coef].set_index("layer")["mean_delta_correct"]
+        t_sweep = test_agg[test_agg.coef == val_best_coef].set_index("layer")["mean_delta_correct"]
+        common  = sorted(set(v_sweep.index) & set(t_sweep.index))
+        if len(common) >= 4:
+            try:
+                from scipy.stats import pearsonr
+                r, p = pearsonr(v_sweep.reindex(common).values, t_sweep.reindex(common).values)
+                agree = "agree ✓" if r > 0.7 else ("moderate" if r > 0.4 else "disagree ✗")
+                _rp(f"\n  Layer-sweep correlation at coef={val_best_coef:+.2f}: "
+                    f"r={r:.3f}, p={p:.3f}  →  {agree}")
+            except ImportError:
+                pass
+
+        # Best-layer agreement
+        vbl = int(val_agg.loc[val_agg.mean_delta_correct.idxmax(), "layer"])
+        tbl = int(test_agg.loc[test_agg.mean_delta_correct.idxmax(), "layer"])
+        match = "MATCH ✓" if vbl == tbl else "MISMATCH ✗ (overfitting risk)"
+        _rp(f"  Best layer: val=L{vbl:02d}  test=L{tbl:02d}  →  {match}")
+        _rp()
+
+
+def _rpt_crossval(cf: pd.DataFrame, mcf: pd.DataFrame, k: int = 5, n_boot: int = 500):
+    """Section 10 — K-fold CV + bootstrap CI on per-question logprob deltas."""
+    _section_hdr(f"CROSS-VALIDATION ({k}-fold + bootstrap, question-level)", "10")
+    _rp("  Randomly splits questions into k folds; each fold is held out in turn.")
+    _rp("  Tells you whether the effect is consistent across different question subsets,")
+    _rp("  not just a fluke of one particular sample.")
+    _rp()
+
+    for raw_df, mode in [(cf, "CF"), (mcf, "MCF")]:
+        if raw_df.empty or "question_id" not in raw_df.columns:
+            continue
+
+        delta_col = ("delta_target_sum_lp"    if mode == "CF" and "delta_target_sum_lp"    in raw_df.columns
+                     else "delta_correct_logprob" if "delta_correct_logprob" in raw_df.columns
+                     else None)
+        if delta_col is None:
+            continue
+
+        _rp(f"  [{mode}]")
+
+        # Use validation split for layer/coef selection if available
+        ref_df  = (raw_df[raw_df["split"] == "validation"]
+                   if "split" in raw_df.columns and "validation" in raw_df["split"].values
+                   else raw_df)
+        cv_df   = raw_df   # always CV over all available questions
+        cv_label = ("val+test questions" if "split" in raw_df.columns
+                    and raw_df["split"].notna().any() else "all questions")
+
+        ref_agg = agg_cf_continuous(ref_df) if mode == "CF" else agg_mcf(ref_df)
+        if ref_agg.empty:
+            continue
+
+        best_row   = ref_agg.loc[ref_agg["mean_delta_correct"].idxmax()]
+        best_layer = best_row["layer"]
+        best_coef  = best_row["coef"]
+
+        cell = cv_df[(cv_df["layer"] == best_layer) & (cv_df["coef"] == best_coef)].copy()
+        if len(cell) < k:
+            _rp(f"  Too few questions ({len(cell)}) at L{int(best_layer):02d}, "
+                f"coef={best_coef:+.2f} for {k}-fold CV — skipping"); continue
+
+        _rp(f"  Selected cell (val-best): L{int(best_layer):02d}, coef={best_coef:+.2f}  "
+            f"n={len(cell)} ({cv_label})")
+        _rp()
+
+        has_wrong = (mode == "CF"
+                     and "delta_target_sum_lp" in cell.columns
+                     and "delta_max_wrong_sum_lp" in cell.columns)
+
+        # ── k-fold ──────────────────────────────────────────────────────────
+        rng = np.random.default_rng(42)
+        qids = cell["question_id"].unique()
+        rng.shuffle(qids)
+        folds = np.array_split(qids, k)
+
+        fold_deltas: List[float] = []
+        fold_sels:   List[float] = []
+
+        hdr = f"  {'Fold':>4}  {'n_q':>4}  {'Δ-correct':>10}"
+        if has_wrong: hdr += f"  {'Selectivity':>12}"
+        _rp(hdr); _hr("·")
+
+        for fi, held_qids in enumerate(folds, 1):
+            fsub = cell[cell["question_id"].isin(held_qids)]
+            md   = fsub[delta_col].mean()
+            fold_deltas.append(md)
+            line = f"  {fi:>4}  {len(fsub):>4}  {_fv(md):>10}"
+            if has_wrong:
+                dc  = fsub["delta_target_sum_lp"].values
+                dw  = fsub["delta_max_wrong_sum_lp"].values
+                den = np.abs(dc) + np.abs(dw)
+                sel = np.where(den > 1e-9, (dc - dw) / den, 0.0).mean()
+                fold_sels.append(sel)
+                line += f"  {_fv(sel, '+.3f'):>12}"
+            _rp(line)
+
+        _hr("·")
+        mn_d, sd_d = np.mean(fold_deltas), np.std(fold_deltas, ddof=1)
+        line = f"  {'Mean':>4}  {'':>4}  {_fv(mn_d):>10}"
+        if has_wrong and fold_sels:
+            mn_s, sd_s = np.mean(fold_sels), np.std(fold_sels, ddof=1)
+            line += f"  {_fv(mn_s, '+.3f'):>12}"
+        _rp(line)
+        line = f"  {'±std':>4}  {'':>4}  {sd_d:>10.4f}"
+        if has_wrong and fold_sels:
+            line += f"  {sd_s:>12.4f}"
+        _rp(line)
+
+        _rp()
+        n_pos     = sum(d > 0 for d in fold_deltas)
+        cv_ratio  = sd_d / abs(mn_d) if abs(mn_d) > 1e-9 else float("inf")
+        if n_pos == k:
+            stab = f"STABLE ✓  Δ-correct positive in all {k}/{k} folds"
+        elif n_pos >= int(k * 0.6):
+            stab = f"MOSTLY STABLE  positive in {n_pos}/{k} folds"
+        else:
+            stab = f"UNSTABLE ✗  positive in only {n_pos}/{k} folds"
+        _rp(f"  Stability : {stab}")
+        _rp(f"  CV ratio  : std/|mean| = {cv_ratio:.2f}  "
+            f"{'(consistent)' if cv_ratio < 0.5 else '(noisy — wide fold-to-fold variation)'}")
+
+        # ── Bootstrap 95% CI ────────────────────────────────────────────────
+        _rp()
+        _rp(f"  Bootstrap 95% CI  (n={n_boot} resamples with replacement):")
+        all_d = cell[delta_col].dropna().values
+        boot_means = np.array([
+            rng.choice(all_d, size=len(all_d), replace=True).mean()
+            for _ in range(n_boot)
+        ])
+        lo, hi = np.percentile(boot_means, [2.5, 97.5])
+        concl = ("fully positive → effect is reliable" if lo > 0
+                 else "crosses zero  → effect is uncertain")
+        _rp(f"    Δ-correct      : [{lo:+.3f}, {hi:+.3f}]  {concl}")
+
+        if has_wrong:
+            all_dc = cell["delta_target_sum_lp"].dropna().values
+            all_dw = cell["delta_max_wrong_sum_lp"].dropna().values
+            if len(all_dc) == len(all_dw) and len(all_dc) > 0:
+                boot_sels = []
+                for _ in range(n_boot):
+                    idx = rng.integers(0, len(all_dc), size=len(all_dc))
+                    dc2, dw2 = all_dc[idx], all_dw[idx]
+                    den2 = np.abs(dc2) + np.abs(dw2)
+                    boot_sels.append(np.where(den2 > 1e-9, (dc2 - dw2) / den2, 0.0).mean())
+                s_lo, s_hi = np.percentile(boot_sels, [2.5, 97.5])
+                s_concl = ("fully positive → target-aware effect confirmed"
+                           if s_lo > 0 else "crosses zero  → selectivity uncertain")
+                _rp(f"    Selectivity    : [{s_lo:+.3f}, {s_hi:+.3f}]  {s_concl}")
+        _rp()
+
+
 def print_report(exp_root: Path, mcf: pd.DataFrame, cf: pd.DataFrame,
                  mcf_agg: pd.DataFrame, cf_agg: pd.DataFrame):
     """Print the full structured text report and optionally save to report.txt."""
@@ -1287,6 +1528,8 @@ def print_report(exp_root: Path, mcf: pd.DataFrame, cf: pd.DataFrame,
     _rpt_kl(cf_agg)
     _rpt_accuracy(mcf_agg)
     _rpt_sanity(cf_agg, mcf_agg)
+    _rpt_split_comparison(cf, mcf)
+    _rpt_crossval(cf, mcf, k=5, n_boot=500)
     _rpt_verdict(cf_agg, mcf_agg)
 
     if _OUT_DIR is not None:
