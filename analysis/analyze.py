@@ -80,6 +80,8 @@ DRIFT_THRESHOLD = 0.05
 _OUT_DIR: Optional[Path] = None
 _SHOW: bool = True
 _SUMMARY_ROWS: Dict[str, pd.DataFrame] = {}   # name → df, saved at end
+_REPORT: bool = False
+_REPORT_LINES: List[str] = []
 
 
 def _save(fig, name: str):
@@ -801,6 +803,500 @@ def plot_compare_section(experiments: List[Tuple[str, pd.DataFrame, pd.DataFrame
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# TEXT REPORT — terminal-friendly output for HPC / no-display environments
+# ═════════════════════════════════════════════════════════════════════════════
+
+_W = 76  # report line width
+
+
+def _rp(line: str = ""):
+    print(line)
+    _REPORT_LINES.append(line)
+
+
+def _hr(char: str = "─"):
+    _rp(char * _W)
+
+
+def _section_hdr(title: str, num: str = ""):
+    _rp()
+    _hr()
+    prefix = f"  {num}. " if num else "  "
+    _rp(f"{prefix}{title}")
+    _hr()
+
+
+def _fv(v, fmt: str = "+.3f", na: str = "    n/a") -> str:
+    """Format float, return na string if NaN/None."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return na
+    return format(v, fmt)
+
+
+def _sig(p) -> str:
+    if p is None or (isinstance(p, float) and np.isnan(p)):
+        return "    "
+    if p < 0.001: return " ***"
+    if p < 0.01:  return "  **"
+    if p < 0.05:  return "   *"
+    return " n.s"
+
+
+def _best_per_layer(agg: pd.DataFrame, val_col: str = "mean_delta_correct",
+                    pos_only: bool = False) -> pd.DataFrame:
+    sub = agg[agg.coef > 0] if pos_only else agg
+    if sub.empty:
+        return pd.DataFrame()
+    idx = sub.groupby("layer")[val_col].idxmax()
+    return sub.loc[idx].sort_values("layer").reset_index(drop=True)
+
+
+# ── Report sections ───────────────────────────────────────────────────────────
+
+def _rpt_overview(exp_root: Path, mcf: pd.DataFrame, cf: pd.DataFrame,
+                  mcf_agg: pd.DataFrame, cf_agg: pd.DataFrame):
+    _rp("=" * _W)
+    _rp("  STEERING VECTOR ANALYSIS REPORT")
+    _rp(f"  Experiment : {exp_root.name}")
+    _rp("=" * _W)
+    _section_hdr("DATA OVERVIEW", "0")
+    _rp(f"  MCF rows   : {len(mcf):,}   (per-question rows, all layers × coefs)")
+    _rp(f"  CF  rows   : {len(cf):,}")
+    ref = mcf_agg if not mcf_agg.empty else cf_agg
+    if not ref.empty:
+        layers = sorted(ref.layer.unique())
+        coefs  = sorted(ref.coef.unique())
+        mid_c  = coefs[len(coefs) // 2]
+        n_q_s  = ref[ref.coef == mid_c]["n"]
+        n_q    = int(n_q_s.mean()) if not n_q_s.empty else "?"
+        _rp(f"  Layers     : L{layers[0]:02d}–L{layers[-1]:02d}  ({len(layers)} total)")
+        _rp(f"  Coefs      : {coefs[0]:+.2f} → {coefs[-1]:+.2f}  ({len(coefs)} values)")
+        half = len(coefs) // 2
+        _rp("  Coef list  : " + "  ".join(f"{c:+.2f}" for c in coefs[:half]))
+        _rp("               " + "  ".join(f"{c:+.2f}" for c in coefs[half:]))
+        _rp(f"  Questions  : ~{n_q} per (layer, coef) cell")
+    _rp()
+
+
+def _rpt_effect(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
+    _section_hdr("EFFECT MAGNITUDE — Does steering move logprobs at all?", "1")
+
+    for agg, mode in [(cf_agg, "CF"), (mcf_agg, "MCF")]:
+        if agg.empty:
+            continue
+        _rp(f"\n  [{mode}]")
+
+        # per-layer best (positive coefs only)
+        best = _best_per_layer(agg, "mean_delta_correct", pos_only=True)
+        if best.empty:
+            continue
+        has_kl = mode == "CF" and "mean_kl_baseline" in agg.columns
+        _rp(f"\n  Per-layer best Δ-correct (best +coef per layer):")
+        hdr = f"  {'Layer':>5}  {'Best_C':>7}  {'Δ-correct':>10}  {'±std':>6}  {'%Impr':>6}  {'%Hurt':>6}"
+        if has_kl:
+            hdr += f"  {'KL':>6}"
+        _rp(hdr)
+        _hr("·")
+        for _, row in best.iterrows():
+            line = (f"  L{int(row.layer):02d}    "
+                    f"{row.coef:+7.2f}  "
+                    f"{_fv(row.mean_delta_correct):>10}  "
+                    f"{row.get('std_delta_correct', float('nan')):>6.3f}  "
+                    f"{row.get('pct_improved', float('nan')):>5.0%}  "
+                    f"{row.get('pct_hurt', float('nan')):>5.0%}")
+            if has_kl:
+                line += f"  {_fv(row.get('mean_kl_baseline', float('nan')), '.4f', '   n/a'):>6}"
+            _rp(line)
+
+        # top-5 cells overall
+        top5 = agg.nlargest(5, "mean_delta_correct")
+        _rp(f"\n  Top 5 cells by Δ-correct:")
+        _rp(f"  {'Rank':>4}  {'Layer':>5}  {'Coef':>6}  {'Δ-correct':>10}  {'%Improved':>10}  {'%Hurt':>6}")
+        _hr("·")
+        for rank, (_, row) in enumerate(top5.iterrows(), 1):
+            _rp(f"  {rank:>4}  L{int(row.layer):02d}    "
+                f"{row.coef:+6.2f}  "
+                f"{_fv(row.mean_delta_correct):>10}  "
+                f"{row.get('pct_improved', float('nan')):>9.0%}  "
+                f"{row.get('pct_hurt', float('nan')):>5.0%}")
+
+        best_cell  = agg.loc[agg.mean_delta_correct.idxmax()]
+        worst_cell = agg.loc[agg.mean_delta_correct.idxmin()]
+        _rp()
+        _rp(f"  BEST  cell: L{int(best_cell.layer):02d}, coef={best_cell.coef:+.2f}, "
+            f"Δ={_fv(best_cell.mean_delta_correct)}")
+        _rp(f"  WORST cell: L{int(worst_cell.layer):02d}, coef={worst_cell.coef:+.2f}, "
+            f"Δ={_fv(worst_cell.mean_delta_correct)}")
+        _rp()
+
+
+def _rpt_coef_sweeps(cf_agg: pd.DataFrame):
+    """Full coef × metric table at the top-4 layers plus first and last."""
+    _section_hdr("COEF SWEEPS AT KEY LAYERS — full coef profile", "2")
+
+    if cf_agg.empty:
+        _rp("  [no CF data]")
+        return
+
+    layer_eff = cf_agg.groupby("layer")["mean_delta_correct"].apply(lambda x: x.abs().max())
+    top4      = layer_eff.nlargest(4).index.tolist()
+    all_layers = sorted(cf_agg.layer.unique())
+    key_layers = sorted(set(top4 + [all_layers[0], all_layers[-1]]))
+
+    has_kl  = "mean_kl_baseline" in cf_agg.columns and not cf_agg.mean_kl_baseline.isna().all()
+    has_sel = "selectivity_index" in cf_agg.columns
+    has_wp  = "wilcoxon_p" in cf_agg.columns
+    has_dw  = "mean_delta_best_wrong" in cf_agg.columns
+
+    for layer in key_layers:
+        sub = cf_agg[cf_agg.layer == layer].sort_values("coef")
+        _rp(f"\n  ── Layer L{layer:02d} ──")
+        hdr = f"  {'Coef':>6}  {'Δ-correct':>10}  {'±std':>6}"
+        if has_dw:  hdr += f"  {'Δ-wrong':>8}"
+        if has_sel: hdr += f"  {'Selectiv':>8}"
+        if has_kl:  hdr += f"  {'KL':>6}"
+        if has_wp:  hdr += f"  {'p-val':>7}  sig"
+        _rp(hdr)
+        _hr("·")
+        for _, row in sub.iterrows():
+            is_base = abs(row.coef) < 1e-6
+            line = (f"  {row.coef:+6.2f}  "
+                    f"{_fv(row.mean_delta_correct):>10}  "
+                    f"{row.get('std_delta_correct', float('nan')):>6.3f}")
+            if has_dw:  line += f"  {_fv(row.get('mean_delta_best_wrong', float('nan'))):>8}"
+            if has_sel: line += f"  {_fv(row.get('selectivity_index', float('nan')), '+.3f', '    n/a'):>8}"
+            if has_kl:  line += f"  {_fv(row.get('mean_kl_baseline', float('nan')), '.4f', '   n/a'):>6}"
+            if has_wp:
+                p    = row.get("wilcoxon_p", float("nan"))
+                line += f"  {_fv(p, '.4f', '   n/a'):>7}  {_sig(p)}"
+            if is_base:
+                line += "  ← baseline (should be ≈0)"
+            _rp(line)
+
+
+def _rpt_selectivity(cf_agg: pd.DataFrame):
+    _section_hdr("TARGET-AWARE SELECTIVITY — Does steering help correct more than wrong?", "3")
+    _rp("  Selectivity = (Δcorrect − Δbest-wrong) / (|Δcorrect| + |Δbest-wrong|)")
+    _rp("    +1.0 = perfectly target-aware   0.0 = uniform shift   −1.0 = anti-target")
+    _rp()
+
+    if cf_agg.empty or "selectivity_index" not in cf_agg.columns:
+        _rp("  [no selectivity data]")
+        return
+
+    # Per-layer summary (positive coefs only)
+    pos = cf_agg[cf_agg.coef > 0]
+    if not pos.empty:
+        per_layer_sel = pos.groupby("layer").agg(
+            mean_sel=("selectivity_index", "mean"),
+            max_sel=("selectivity_index", "max"),
+        ).reset_index()
+        best_coef_map = (pos.loc[pos.groupby("layer")["selectivity_index"].idxmax()]
+                         .set_index("layer")["coef"])
+        per_layer_sel["best_coef"] = per_layer_sel["layer"].map(best_coef_map)
+
+        _rp("  Per-layer selectivity (averaged over positive coefs):")
+        _rp(f"  {'Layer':>5}  {'Mean Sel':>9}  {'Max Sel':>8}  {'BestCoef':>9}  Interpretation")
+        _hr("·")
+        for _, row in per_layer_sel.sort_values("layer").iterrows():
+            sel = row.mean_sel
+            if sel > 0.15:   interp = "target-aware ✓"
+            elif sel > 0.05: interp = "weakly positive"
+            elif sel > -0.05: interp = "near-zero (uniform)"
+            else:             interp = "anti-target ✗"
+            _rp(f"  L{int(row.layer):02d}    "
+                f"{_fv(sel, '+.3f'):>9}  "
+                f"{_fv(row.max_sel, '+.3f'):>8}  "
+                f"{row.best_coef:>+9.2f}  "
+                f"{interp}")
+
+    # Top-10 cells by selectivity
+    _rp()
+    has_wp = "wilcoxon_p" in cf_agg.columns
+    top10 = cf_agg[cf_agg.coef != 0.0].nlargest(10, "selectivity_index")
+    _rp("  Top 10 cells by selectivity index:")
+    hdr = f"  {'Rank':>4}  {'Layer':>5}  {'Coef':>6}  {'Selectiv':>8}  {'Δ-correct':>10}  {'Δ-wrong':>8}"
+    if has_wp: hdr += f"  {'p-val':>7}  sig"
+    _rp(hdr)
+    _hr("·")
+    for rank, (_, row) in enumerate(top10.iterrows(), 1):
+        line = (f"  {rank:>4}  L{int(row.layer):02d}    "
+                f"{row.coef:+6.2f}  "
+                f"{_fv(row.selectivity_index, '+.3f'):>8}  "
+                f"{_fv(row.mean_delta_correct):>10}  "
+                f"{_fv(row.get('mean_delta_best_wrong', float('nan'))):>8}")
+        if has_wp:
+            p = row.get("wilcoxon_p", float("nan"))
+            line += f"  {_fv(p, '.4f', '   n/a'):>7}  {_sig(p)}"
+        _rp(line)
+
+    # Wilcoxon significant cells
+    _rp()
+    if has_wp:
+        sig = cf_agg[(cf_agg.coef != 0.0) & (cf_agg.wilcoxon_p < 0.05)].sort_values("wilcoxon_p")
+        _rp(f"  STATISTICALLY SIGNIFICANT CELLS (Wilcoxon p < 0.05)  — n={len(sig)}:")
+        if sig.empty:
+            _rp("    None — no cell shows target-aware effect at p<0.05")
+        else:
+            _rp(f"  {'Layer':>5}  {'Coef':>6}  {'p-value':>8}  sig  {'Selectiv':>8}  "
+                f"{'Δ-correct':>10}  {'Δ-wrong':>8}")
+            _hr("·")
+            for _, row in sig.iterrows():
+                p = row.wilcoxon_p
+                _rp(f"  L{int(row.layer):02d}    "
+                    f"{row.coef:+6.2f}  "
+                    f"{p:>8.4f}  {_sig(p)}  "
+                    f"{_fv(row.selectivity_index, '+.3f'):>8}  "
+                    f"{_fv(row.mean_delta_correct):>10}  "
+                    f"{_fv(row.get('mean_delta_best_wrong', float('nan'))):>8}")
+        _rp()
+
+
+def _rpt_directionality(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
+    _section_hdr("DIRECTIONALITY — Does the sign of the coefficient matter?", "4")
+    _rp("  +coef and −coef produce OPPOSITE Δ → vector is directional (encodes domain)")
+    _rp("  +coef and −coef produce SAME-SIGN Δ → vector captures universal direction")
+    _rp()
+
+    for agg, mode in [(cf_agg, "CF"), (mcf_agg, "MCF")]:
+        if agg.empty:
+            continue
+        max_pos_c = agg[agg.coef > 0]["coef"].max() if (agg.coef > 0).any() else None
+        min_neg_c = agg[agg.coef < 0]["coef"].min() if (agg.coef < 0).any() else None
+        if max_pos_c is None or min_neg_c is None:
+            continue
+
+        _rp(f"  [{mode}]  coef={max_pos_c:+.2f} vs coef={min_neg_c:+.2f}")
+        _rp(f"  {'Layer':>5}  {'Δ@+coef':>9}  {'Δ@-coef':>9}  {'Opp.signs':>9}  Note")
+        _hr("·")
+
+        pos_vals = agg[agg.coef == max_pos_c].set_index("layer")["mean_delta_correct"]
+        neg_vals = agg[agg.coef == min_neg_c].set_index("layer")["mean_delta_correct"]
+        layers   = sorted(set(pos_vals.index) | set(neg_vals.index))
+
+        n_dir = 0
+        for layer in layers:
+            p = pos_vals.get(layer, float("nan"))
+            n = neg_vals.get(layer, float("nan"))
+            if not (np.isnan(p) or np.isnan(n)) and p * n < 0:
+                opp, note, n_dir = "YES ✓", "", n_dir + 1
+            elif np.isnan(p) or np.isnan(n):
+                opp, note = "n/a", ""
+            elif p > 0 and n > 0:
+                opp, note = "no", "both positive → universal+ direction"
+            else:
+                opp, note = "no", "both negative → universal− direction"
+            _rp(f"  L{layer:02d}    "
+                f"{_fv(p):>9}  {_fv(n):>9}  {opp:>9}  {note}")
+
+        _rp(f"\n  Directional at {n_dir}/{len(layers)} layers "
+            f"({100 * n_dir / max(len(layers), 1):.0f}%)")
+        _rp()
+
+
+def _rpt_kl(cf_agg: pd.DataFrame):
+    _section_hdr("INTERVENTION MAGNITUDE — KL(steered ‖ baseline)", "5")
+    _rp("  Measures how much the answer distribution shifts, regardless of direction.")
+    _rp("  KL ≈ 0 → negligible intervention  |  KL > 0.1 → substantial shift")
+    _rp()
+
+    if cf_agg.empty or "mean_kl_baseline" not in cf_agg.columns \
+            or cf_agg.mean_kl_baseline.isna().all():
+        _rp("  [no KL data]")
+        return
+
+    max_pos_c = cf_agg[cf_agg.coef > 0]["coef"].max() if (cf_agg.coef > 0).any() else None
+    if max_pos_c is None:
+        return
+
+    sub = cf_agg[cf_agg.coef == max_pos_c].sort_values("layer")
+    _rp(f"  KL at coef={max_pos_c:+.2f} (strongest +coef) per layer:")
+    _rp(f"  {'Layer':>5}  {'Mean KL':>8}  Magnitude")
+    _hr("·")
+    for _, row in sub.iterrows():
+        kl = row.mean_kl_baseline
+        if np.isnan(kl):           mag = "n/a"
+        elif kl < 0.005:           mag = "negligible"
+        elif kl < 0.02:            mag = "small"
+        elif kl < 0.08:            mag = "moderate"
+        elif kl < 0.25:            mag = "large"
+        else:                       mag = "VERY LARGE"
+        _rp(f"  L{int(row.layer):02d}    {_fv(kl, '.4f', '    n/a'):>8}  {mag}")
+
+    _rp()
+    pos_kl = cf_agg[cf_agg.coef > 0].groupby("layer")["mean_kl_baseline"].max()
+    vals   = "  ".join(f"L{int(l):02d}:{v:.3f}" for l, v in pos_kl.items())
+    # wrap at width
+    for i in range(0, len(vals), _W - 4):
+        _rp("  " + vals[i:i + _W - 4])
+    _rp()
+
+
+def _rpt_accuracy(mcf_agg: pd.DataFrame):
+    _section_hdr("ACCURACY (MCF) — Baseline and best-coef accuracy per layer", "6")
+
+    if mcf_agg.empty or "accuracy" not in mcf_agg.columns:
+        _rp("  [no MCF accuracy data]")
+        return
+
+    coefs   = sorted(mcf_agg.coef.unique())
+    base_c  = min(coefs, key=lambda c: abs(c))   # closest to 0
+    base    = mcf_agg[mcf_agg.coef == base_c][["layer", "accuracy"]].sort_values("layer")
+    best_p  = _best_per_layer(mcf_agg, "accuracy", pos_only=True)
+
+    _rp("  Layer  Baseline Acc  Best(+)Acc  Best(+)C  Acc Δ")
+    _hr("·")
+    for _, brow in base.iterrows():
+        layer  = brow.layer
+        brow2  = best_p[best_p.layer == layer]
+        if brow2.empty:
+            continue
+        brow2  = brow2.iloc[0]
+        delta  = brow2.accuracy - brow.accuracy
+        _rp(f"  L{int(layer):02d}    "
+            f"{brow.accuracy:>12.1%}  "
+            f"{brow2.accuracy:>10.1%}  "
+            f"{brow2.coef:>+8.2f}  "
+            f"{delta:>+6.1%}")
+
+    n_q = int(mcf_agg[mcf_agg.coef == base_c]["n"].mean())
+    se  = 1 / (2 * n_q ** 0.5)
+    _rp()
+    _rp(f"  Mean baseline accuracy : {base['accuracy'].mean():.1%}")
+    _rp(f"  Mean best-coef accuracy: {best_p['accuracy'].mean():.1%}  "
+        f"(Δ = {best_p['accuracy'].mean() - base['accuracy'].mean():+.1%})")
+    _rp(f"  ⚠  n≈{n_q} per cell → SE ≈ {se:.1%}; differences < {2*se:.0%} are within 2σ noise")
+    _rp()
+
+
+def _rpt_sanity(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
+    _section_hdr("SANITY CHECKS", "7")
+
+    for agg, mode in [(cf_agg, "CF"), (mcf_agg, "MCF")]:
+        if agg.empty:
+            continue
+        zero = agg[agg.coef.abs() < 1e-6]
+        if zero.empty:
+            continue
+        max_drift = zero["mean_delta_correct"].abs().max()
+        layer_md  = int(zero.loc[zero["mean_delta_correct"].abs().idxmax(), "layer"])
+        status    = "PASS ✓" if max_drift < 0.05 else "WARNING ✗ (possible bug)"
+        _rp(f"  [{mode}] coef=0 drift: max |Δ| = {max_drift:.4f} at L{layer_md:02d}  →  {status}")
+        if max_drift >= 0.05:
+            _rp("    Drift > 0.05 at coef=0 suggests a bug or numerical issue. "
+                "Investigate before trusting results.")
+    _rp()
+
+
+def _rpt_verdict(cf_agg: pd.DataFrame, mcf_agg: pd.DataFrame):
+    _section_hdr("SUMMARY VERDICT", "8")
+
+    agg = cf_agg if not cf_agg.empty else mcf_agg
+    if agg.empty:
+        _rp("  No data — cannot produce verdict.")
+        return
+
+    findings = []
+
+    # 1. Effect size
+    max_eff  = agg["mean_delta_correct"].abs().max()
+    best_c   = agg.loc[agg["mean_delta_correct"].abs().idxmax()]
+    eff_desc = ("negligible (<0.05)" if max_eff < 0.05 else
+                "small (0.05–0.2)"  if max_eff < 0.2  else
+                "moderate (0.2–0.5)" if max_eff < 0.5 else "large (>0.5)")
+    findings.append(
+        f"EFFECT SIZE: {eff_desc} — max |Δ-correct| = {max_eff:.3f} "
+        f"at L{int(best_c.layer):02d}, coef={best_c.coef:+.2f}."
+    )
+
+    # 2. Selectivity
+    if not cf_agg.empty and "selectivity_index" in cf_agg.columns:
+        pos_sel  = cf_agg[cf_agg.coef > 0]["selectivity_index"]
+        mean_sel = pos_sel.mean()
+        max_sel  = pos_sel.max()
+        best_sel = cf_agg.loc[cf_agg.selectivity_index.idxmax()]
+        if mean_sel > 0.1:
+            desc = f"positive (mean={mean_sel:+.3f}) — steering is target-aware"
+        elif mean_sel > 0:
+            desc = f"weakly positive (mean={mean_sel:+.3f}) — marginal target-awareness"
+        elif mean_sel > -0.05:
+            desc = f"near-zero (mean={mean_sel:+.3f}) — uniform probability redistribution"
+        else:
+            desc = f"negative (mean={mean_sel:+.3f}) — anti-target effect"
+        findings.append(
+            f"SELECTIVITY: {desc}. "
+            f"Max={max_sel:+.3f} at L{int(best_sel.layer):02d}, coef={best_sel.coef:+.2f}."
+        )
+
+    # 3. Statistical significance
+    if not cf_agg.empty and "wilcoxon_p" in cf_agg.columns:
+        sig05 = cf_agg[(cf_agg.coef != 0.0) & (cf_agg.wilcoxon_p < 0.05)]
+        sig01 = cf_agg[(cf_agg.coef != 0.0) & (cf_agg.wilcoxon_p < 0.01)]
+        if len(sig05) == 0:
+            findings.append(
+                "SIGNIFICANCE: No cells significant at p<0.05 — "
+                "target-aware effect is not statistically confirmed."
+            )
+        else:
+            best_sig = sig05.loc[sig05.wilcoxon_p.idxmin()]
+            findings.append(
+                f"SIGNIFICANCE: {len(sig05)} cells at p<0.05, {len(sig01)} at p<0.01. "
+                f"Most significant: L{int(best_sig.layer):02d}, coef={best_sig.coef:+.2f}, "
+                f"p={best_sig.wilcoxon_p:.4f}."
+            )
+
+    # 4. Best layer band
+    top5_layers = (agg.groupby("layer")["mean_delta_correct"]
+                   .apply(lambda x: x.abs().max())
+                   .nlargest(5).index.tolist())
+    findings.append(f"BEST LAYERS: {sorted(top5_layers)} — top-5 by max |Δ-correct|.")
+
+    # 5. Directionality
+    if (agg.coef > 0).any() and (agg.coef < 0).any():
+        max_pc = agg[agg.coef > 0]["coef"].max()
+        min_nc = agg[agg.coef < 0]["coef"].min()
+        pv = agg[agg.coef == max_pc]["mean_delta_correct"].values
+        nv = agg[agg.coef == min_nc]["mean_delta_correct"].values
+        n_dir = int((pv * nv < 0).sum())
+        n_tot = len(pv)
+        pct   = 100 * n_dir / max(n_tot, 1)
+        desc  = ("strong" if pct > 70 else "mixed" if pct > 40 else "weak")
+        findings.append(
+            f"DIRECTIONALITY: {desc} — {n_dir}/{n_tot} layers ({pct:.0f}%) show "
+            "opposite sign at +coef vs −coef."
+        )
+
+    _rp()
+    for i, f in enumerate(findings, 1):
+        _rp(f"  {i}. {f}")
+        _rp()
+    _hr("═")
+
+
+def print_report(exp_root: Path, mcf: pd.DataFrame, cf: pd.DataFrame,
+                 mcf_agg: pd.DataFrame, cf_agg: pd.DataFrame):
+    """Print the full structured text report and optionally save to report.txt."""
+    global _REPORT_LINES
+    _REPORT_LINES = []
+
+    _rpt_overview(exp_root, mcf, cf, mcf_agg, cf_agg)
+    _rpt_effect(cf_agg, mcf_agg)
+    _rpt_coef_sweeps(cf_agg)
+    _rpt_selectivity(cf_agg)
+    _rpt_directionality(cf_agg, mcf_agg)
+    _rpt_kl(cf_agg)
+    _rpt_accuracy(mcf_agg)
+    _rpt_sanity(cf_agg, mcf_agg)
+    _rpt_verdict(cf_agg, mcf_agg)
+
+    if _OUT_DIR is not None:
+        _OUT_DIR.mkdir(parents=True, exist_ok=True)
+        report_path = _OUT_DIR / "report.txt"
+        report_path.write_text("\n".join(_REPORT_LINES) + "\n")
+        print(f"\n  Report saved → {report_path}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # RUN
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -838,6 +1334,9 @@ def run_one(exp_root: Path, sections: List[str]) -> Tuple[pd.DataFrame, pd.DataF
     if "negcoef" in sections:
         print("  [negcoef]"); plot_negcoef_section(mcf_agg, cf_agg)
 
+    if _REPORT:
+        print_report(exp_root, mcf, cf, mcf_agg, cf_agg)
+
     # Save aggregates
     if _OUT_DIR is not None:
         if not mcf_agg.empty:
@@ -851,7 +1350,7 @@ def run_one(exp_root: Path, sections: List[str]) -> Tuple[pd.DataFrame, pd.DataF
 
 
 def main():
-    global _OUT_DIR, _SHOW
+    global _OUT_DIR, _SHOW, _REPORT
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("exp_roots", nargs="+", type=Path,
@@ -863,6 +1362,8 @@ def main():
     p.add_argument("--out-dir", type=Path, default=None,
                    help="Override save directory")
     p.add_argument("--no-show", action="store_true", help="Don't display plots interactively")
+    p.add_argument("--report", action="store_true",
+                   help="Print structured text report (no images needed — good for HPC)")
     args = p.parse_args()
 
     sections = ALL_SECTIONS if args.section == "all" else args.section.split(",")
@@ -870,7 +1371,8 @@ def main():
         if s not in ALL_SECTIONS:
             sys.exit(f"Unknown section: {s!r}. Pick from {ALL_SECTIONS} or 'all'.")
 
-    _SHOW = not args.no_show and not args.save  # if both --save and --no-show absent, show
+    _SHOW   = not args.no_show and not args.save
+    _REPORT = args.report
 
     # Multi-experiment vs single-experiment branching
     if len(args.exp_roots) == 1:
