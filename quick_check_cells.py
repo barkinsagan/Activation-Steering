@@ -4,19 +4,36 @@ from pathlib import Path
 
 exp = Path("results/exp_20260626_phys_vs_bio_continuous_full")
 
-# Cells to compare val vs test on Δ-correct / Δ-wrong
+# Cells to compare val vs test on Δ-correct / Δ-wrong (kept narrow for table width)
 CELLS = [
-    (11, 0.25),
-    (12, 0.25),
-    (13, 0.25),
-    (14, 0.50),
-    (16, 0.25),
+    (11, 0.25), (11, 0.50),
+    (12, 0.25), (12, 0.50), (12, 0.75),
+    (13, 0.25), (13, 0.50),
+    (14, 0.25), (14, 0.50),
+    (16, 0.25), (16, 0.50), (16, 0.75),
+    (17, 0.50), (17, 0.75),
     (20, 1.00),
-    (25, 3.00),
+    (25, 1.00), (25, 3.00),
 ]
+
+# Bands for pooled-layer cross-validation. Each entry: (name, layers, coefs).
+# At each (band, coef) we average per-question Δc and Δw across the band's
+# layers, then CV + bootstrap on the per-question averaged values. This lifts
+# the SNR if the same vector behaves coherently across the band.
+BANDS = [
+    ("L11-L13 divergence-peak",   [11, 12, 13],     [0.25, 0.50, 0.75]),
+    ("L14-L17 target-aware",      [14, 15, 16, 17], [0.25, 0.50, 0.75]),
+    ("L19-L21 sharpening",        [19, 20, 21],     [0.50, 0.75, 1.00, 1.50]),
+    ("L25-L26 late directional",  [25, 26],         [1.00, 1.50, 2.00, 3.00]),
+]
+
+K_FOLDS = 5
+N_BOOT  = 1000
+SEED    = 42
 
 # Layers to compare *baselines* (coef = 0) on val vs test
 BASELINE_LAYERS = sorted({l for l, _ in CELLS})
+
 
 # ── Load CF data ─────────────────────────────────────────────────────────────
 dfs = []
@@ -33,9 +50,77 @@ cf = cf.merge(
     how="left",
 )
 
-# ── Section 1: Δc / Δw at selected (layer, coef) cells ──────────────────────
+
+def _best_wrong_at_zero(sub: pd.DataFrame) -> pd.Series:
+    cols = ["false1_sum_lp", "false2_sum_lp", "false3_sum_lp"]
+    return sub[cols].max(axis=1)
+
+
+def _verdict(lo: float, hi: float, want_positive: bool) -> str:
+    if want_positive and lo > 0:      return "fully positive ✓"
+    if (not want_positive) and hi < 0: return "fully negative ✓"
+    return "crosses zero"
+
+
+def _cv_and_bootstrap(per_q_dc: np.ndarray, per_q_dw: np.ndarray,
+                      label: str, rng: np.random.Generator):
+    """Run K-fold CV + bootstrap on per-question Δc / Δw arrays. Prints results."""
+    n = len(per_q_dc)
+    if n < K_FOLDS:
+        print(f"  {label}: too few questions ({n}) for {K_FOLDS}-fold CV")
+        return
+
+    idx = np.arange(n)
+    rng.shuffle(idx)
+    folds = np.array_split(idx, K_FOLDS)
+
+    fold_dc, fold_dw, fold_sel = [], [], []
+    for fi, held in enumerate(folds, 1):
+        dc = float(per_q_dc[held].mean())
+        dw = float(per_q_dw[held].mean())
+        fold_dc.append(dc); fold_dw.append(dw); fold_sel.append(dc - dw)
+
+    n_pos_dc  = sum(d > 0 for d in fold_dc)
+    n_neg_dw  = sum(d < 0 for d in fold_dw)
+    n_pos_sel = sum(s > 0 for s in fold_sel)
+
+    boot_dc, boot_dw, boot_sel = [], [], []
+    for _ in range(N_BOOT):
+        bi = rng.integers(0, n, size=n)
+        boot_dc.append(per_q_dc[bi].mean())
+        boot_dw.append(per_q_dw[bi].mean())
+        boot_sel.append((per_q_dc[bi] - per_q_dw[bi]).mean())
+    lo_dc, hi_dc = np.percentile(boot_dc,  [2.5, 97.5])
+    lo_dw, hi_dw = np.percentile(boot_dw,  [2.5, 97.5])
+    lo_se, hi_se = np.percentile(boot_sel, [2.5, 97.5])
+
+    mean_dc  = float(np.mean(fold_dc))
+    mean_dw  = float(np.mean(fold_dw))
+    mean_sel = float(np.mean(fold_sel))
+
+    print(
+        f"  {label}  n_pool={n}  "
+        f"meanΔc={mean_dc:+.4f}  meanΔw={mean_dw:+.4f}  meanSel={mean_sel:+.4f}"
+    )
+    print(
+        f"    folds:  Δc>0 in {n_pos_dc}/{K_FOLDS}, "
+        f"Δw<0 in {n_neg_dw}/{K_FOLDS}, "
+        f"Δc-Δw>0 in {n_pos_sel}/{K_FOLDS}"
+    )
+    print(
+        f"    Δc      : [{lo_dc:+.4f}, {hi_dc:+.4f}]  {_verdict(lo_dc, hi_dc, True)}"
+    )
+    print(
+        f"    Δw      : [{lo_dw:+.4f}, {hi_dw:+.4f}]  {_verdict(lo_dw, hi_dw, False)}"
+    )
+    print(
+        f"    Δc - Δw : [{lo_se:+.4f}, {hi_se:+.4f}]  {_verdict(lo_se, hi_se, True)}"
+    )
+
+
+# ── Section 1: Δc / Δw at selected (layer, coef) cells (val vs test) ────────
 print("=" * 84)
-print("DELTA-CORRECT / DELTA-WRONG  (val vs test, selected cells)")
+print("SECTION 1: DELTA-CORRECT / DELTA-WRONG  (val vs test, per cell)")
 print("=" * 84)
 print(
     f"{'cell':>12}  {'split':>11}  {'n':>3}  {'Dc':>9}  {'SE_Dc':>7}  "
@@ -64,17 +149,10 @@ for layer, coef in CELLS:
         )
     print()
 
+
 # ── Section 2: baseline (coef = 0) comparison val vs test ─────────────────
-# If val and test baselines diverge systematically, "Δ" comparisons across
-# splits aren't apples-to-apples — the steered logprob is being subtracted
-# from different baseline distributions. Suspect heterogeneity if:
-#   - mean target_sum_lp differs by > 1σ between val and test
-#   - mean best-wrong differs by > 1σ
-#   - per-question margin (target − best-wrong) distribution shifts
 print("=" * 84)
-print("BASELINE COMPARISON  (coef = 0, val vs test, per layer)")
-print("  If splits draw from different question distributions, baseline target")
-print("  and best-wrong logprobs will differ. That would explain Δw flips.")
+print("SECTION 2: BASELINE COMPARISON  (coef = 0, val vs test, per layer)")
 print("=" * 84)
 print(
     f"{'layer':>5}  {'split':>11}  {'n':>3}  "
@@ -83,13 +161,6 @@ print(
     f"{'margin':>8}  {'mar_std':>8}"
 )
 print("-" * 84)
-
-
-def _best_wrong_at_zero(sub: pd.DataFrame) -> pd.Series:
-    """Per-row best wrong logprob = max(false1, false2, false3) at coef=0."""
-    cols = ["false1_sum_lp", "false2_sum_lp", "false3_sum_lp"]
-    return sub[cols].max(axis=1)
-
 
 for layer in BASELINE_LAYERS:
     base = cf[(cf.layer == layer) & (abs(cf.coef) < 1e-6)]
@@ -109,13 +180,10 @@ for layer in BASELINE_LAYERS:
         )
     print()
 
+
 # ── Section 3: 2-sample t-tests on baseline distributions ────────────────
-# Cleanest "are splits comparable?" check: do val and test baselines have
-# significantly different means? If so, deltas across splits aren't directly
-# comparable.
 print("=" * 84)
-print("BASELINE T-TEST  (Welch's t-test, val vs test, per layer)")
-print("  H0: same population mean for val and test. p<0.05 = splits not comparable.")
+print("SECTION 3: BASELINE T-TEST  (Welch's t, val vs test, per layer)")
 print("=" * 84)
 print(
     f"{'layer':>5}  {'metric':>10}  "
@@ -151,26 +219,11 @@ except ImportError:
     print("  scipy not available — skipping t-tests")
 
 
-# ── Section 4: pooled k-fold CV on val+test ──────────────────────────────
-# Workaround for the small-test-set sampling-variance problem identified
-# in the baseline t-test: pool val and test questions, run k-fold CV on the
-# pool. We lose the "true held-out" guarantee, but with σ≈22 on baseline
-# logprobs and test n=25, a single random test draw is too noisy to trust
-# anyway. Pooled CV gives a stable per-cell mean and a fold-stability check.
-K_FOLDS = 5
-N_BOOT  = 1000
-SEED    = 42
-
+# ── Section 4: pooled CV + bootstrap at each individual cell ────────────
 print("=" * 84)
-print(f"POOLED CROSS-VALIDATION  (val+test pooled, {K_FOLDS}-fold + bootstrap)")
-print("  Workaround for small-n test set with heterogeneous baselines.")
-print("  Per cell: per-fold Δc, stability check, and bootstrap 95% CI on the")
-print("  pooled-set mean.")
+print(f"SECTION 4: POOLED CV + BOOTSTRAP, PER CELL  ({K_FOLDS}-fold, B={N_BOOT})")
+print("  Pools val+test, runs CV and bootstrap on per-question Δc / Δw.")
 print("=" * 84)
-print(
-    f"{'cell':>12}  {'fold':>4}  {'n':>3}  {'Dc':>9}  {'Dw':>9}  {'Dc-Dw':>9}"
-)
-print("-" * 84)
 
 rng = np.random.default_rng(SEED)
 
@@ -178,76 +231,50 @@ for layer, coef in CELLS:
     cell = cf[(cf.layer == layer) & (abs(cf.coef - coef) < 1e-6)]
     pool = cell[cell.split.isin(["validation", "test"])].copy()
     if pool.empty:
-        print(f"L{layer:02d} {coef:+.2f}: no val+test data")
-        continue
+        print(f"L{layer:02d} {coef:+.2f}: no val+test data\n"); continue
 
-    qids = pool["question_id"].unique()
-    rng.shuffle(qids)
-    folds = np.array_split(qids, K_FOLDS)
-
-    fold_dc, fold_dw, fold_sel = [], [], []
+    per_q_dc = pool["delta_target_sum_lp"].values.astype(float)
+    per_q_dw = pool["delta_max_wrong_sum_lp"].values.astype(float)
     label = f"L{layer:02d} {coef:+.2f}"
-
-    for fi, held in enumerate(folds, 1):
-        f_sub = pool[pool.question_id.isin(held)]
-        dc = f_sub["delta_target_sum_lp"].mean()
-        dw = f_sub["delta_max_wrong_sum_lp"].mean()
-        fold_dc.append(dc)
-        fold_dw.append(dw)
-        fold_sel.append(dc - dw)
-        print(
-            f"{label:>12}  {fi:>4}  {len(f_sub):>3}  "
-            f"{dc:+.4f}  {dw:+.4f}  {dc-dw:+.4f}"
-        )
-
-    # Stability summary
-    mn_dc, sd_dc = float(np.mean(fold_dc)), float(np.std(fold_dc, ddof=1))
-    mn_dw, sd_dw = float(np.mean(fold_dw)), float(np.std(fold_dw, ddof=1))
-    mn_sel       = float(np.mean(fold_sel))
-    n_pos_dc     = sum(d > 0 for d in fold_dc)
-    n_neg_dw     = sum(d < 0 for d in fold_dw)
-    n_pos_sel    = sum(s > 0 for s in fold_sel)
-
-    print(
-        f"{label:>12}  {'mean':>4}        "
-        f"{mn_dc:+.4f}  {mn_dw:+.4f}  {mn_sel:+.4f}"
-    )
-    print(
-        f"{label:>12}  {'std':>4}         "
-        f"{sd_dc:.4f}   {sd_dw:.4f}   {(sd_dc**2 + sd_dw**2)**0.5:.4f}"
-    )
-    print(
-        f"  Fold consistency: Δc>0 in {n_pos_dc}/{K_FOLDS} folds, "
-        f"Δw<0 in {n_neg_dw}/{K_FOLDS}, Δc-Δw>0 in {n_pos_sel}/{K_FOLDS}"
-    )
-
-    # Bootstrap 95% CI on the pooled per-question Δc and Δw
-    dc_arr = pool["delta_target_sum_lp"].dropna().values
-    dw_arr = pool["delta_max_wrong_sum_lp"].dropna().values
-    if len(dc_arr) == 0 or len(dw_arr) == 0:
-        print("  Bootstrap: no data")
-    else:
-        # Use the SAME bootstrap indices for Δc, Δw to preserve per-question pairing
-        boot_dc, boot_dw, boot_sel = [], [], []
-        n = len(dc_arr)
-        for _ in range(N_BOOT):
-            idx = rng.integers(0, n, size=n)
-            boot_dc.append(dc_arr[idx].mean())
-            boot_dw.append(dw_arr[idx].mean())
-            boot_sel.append((dc_arr[idx] - dw_arr[idx]).mean())
-        lo_dc, hi_dc   = np.percentile(boot_dc,  [2.5, 97.5])
-        lo_dw, hi_dw   = np.percentile(boot_dw,  [2.5, 97.5])
-        lo_se, hi_se   = np.percentile(boot_sel, [2.5, 97.5])
-
-        def _verdict(lo: float, hi: float, want_positive: bool) -> str:
-            if lo > 0 and want_positive:  return "fully positive ✓"
-            if hi < 0 and not want_positive: return "fully negative ✓"
-            return "crosses zero"
-
-        print(
-            f"  Bootstrap 95% CI (n_pool={n}, B={N_BOOT}):\n"
-            f"    Δc      : [{lo_dc:+.4f}, {hi_dc:+.4f}]  {_verdict(lo_dc, hi_dc, True)}\n"
-            f"    Δw      : [{lo_dw:+.4f}, {hi_dw:+.4f}]  {_verdict(lo_dw, hi_dw, False)}\n"
-            f"    Δc - Δw : [{lo_se:+.4f}, {hi_se:+.4f}]  {_verdict(lo_se, hi_se, True)}"
-        )
+    _cv_and_bootstrap(per_q_dc, per_q_dw, label, rng)
     print()
+
+
+# ── Section 5: BAND-pooled CV + bootstrap ──────────────────────────────
+# For each (band, coef): per question, average Δc and Δw across the band's
+# layers, then CV+bootstrap on those per-question averages. If the band moves
+# coherently with the vector, this should clear CI bars that no single cell
+# could clear at n=76.
+print("=" * 84)
+print("SECTION 5: BAND-POOLED CV + BOOTSTRAP  (per-question averaged across band)")
+print("  Each per-question observation = mean Δc / Δw across the band's layers.")
+print("  Lifts SNR if the band behaves coherently; collapses noise across layers.")
+print("=" * 84)
+
+for band_name, layers, coefs in BANDS:
+    print(f"\n── Band: {band_name}  (layers {layers}) ──")
+    for coef in coefs:
+        sub = cf[
+            (cf.layer.isin(layers))
+            & (abs(cf.coef - coef) < 1e-6)
+            & (cf.split.isin(["validation", "test"]))
+        ].copy()
+        if sub.empty:
+            print(f"  coef={coef:+.2f}: no data"); continue
+
+        # Per-question average across the band's layers
+        agg = sub.groupby("question_id").agg(
+            dc=("delta_target_sum_lp",    "mean"),
+            dw=("delta_max_wrong_sum_lp", "mean"),
+            n_layers=("layer",            "nunique"),
+        ).reset_index()
+        # Only keep questions with full band coverage
+        agg = agg[agg["n_layers"] == len(layers)]
+        if agg.empty:
+            print(f"  coef={coef:+.2f}: no questions with full band coverage"); continue
+
+        per_q_dc = agg["dc"].values
+        per_q_dw = agg["dw"].values
+        label = f"coef={coef:+.2f}"
+        _cv_and_bootstrap(per_q_dc, per_q_dw, label, rng)
+        print()
