@@ -1,0 +1,99 @@
+Any measurement of position, distance, or speed must be made with respect to a
+reference frame, or frame of reference. For example, while you are on a train
+traveling at suppose a person walks past you toward the front of the
+train at a speed of, say, (Fig. 2–2). This is the person’s speed
+with respect to the train as frame of reference. With respect to the ground,
+that person is moving at a speed of It is always
+important to specify the frame of reference when stating a speed. In everyday
+life, we usually mean “with respect to the Earth” without even thinking about it,
+but the reference frame must be specified whenever there might be confusion.
+80 kmh + 5 kmh = 85 kmh.
+Collisions in which kinetic energy is not conserved are called inelastic collisions.
+Some of the initial kinetic energy is transformed into other types of energy, such
+as thermal or potential energy, so the total kinetic energy after the collision is less
+than the total kinetic energy before the collision. The inverse can also happen
+when potential energy (such as chemical or nuclear) is released, in which case the
+total kinetic energy after the interaction can be greater than the initial kinetic
+energy. Explosions are examples of this type.
+Typical macroscopic collisions are inelastic, at least to some extent, and often to
+a large extent. If two objects stick together as a result of a collision, the collision
+is said to be completely inelastic. Two colliding balls of putty that stick together
+or two railroad cars that couple together when they collide are examples of completely inelastic collisions. The kinetic energy in some cases is all transformed to
+other forms of energy in an inelastic collision, but in other cases only part of it is.
+In Example 7–3, for instance, we saw that when a traveling railroad car collided
+with a stationary one, the coupled cars traveled off with some kinetic energy. In a
+completely inelastic collision, the maximum amount of kinetic energy is transformed
+to other forms consistent with conservation of momentum. Even though kinetic
+energy is not conserved in inelastic collisions, the total energy is always conserved,
+and the total vector momentum is also conserved.
+Diffusion can be readily understood on the basis of kinetic theory and the
+random motion of molecules. Consider a tube of cross-sectional area A containing
+molecules in a higher concentration on the left than on the right, Fig. 13–28.
+We assume the molecules are in random motion. Yet there will be a net flow of
+molecules to the right. To see why, let us consider the small section of tube
+of length as shown. Molecules from both regions 1 and 2 cross into this
+central section as a result of their random motion. The more molecules there are
+in a region, the more will strike a given area or cross a boundary. Since there is a
+greater concentration of molecules in region 1 than in region 2, more molecules
+cross into the central section from region 1 than from region 2. There is, then, a net
+flow of molecules from left to right, from high concentration toward low
+concentration The net flow becomes zero only when the concentrations
+become equal.
+We might expect that the greater the difference in concentration, the greater
+the flow rate. Indeed, the rate of diffusion, J (number of molecules or moles or
+kg per second), is directly proportional to the difference in concentration per
+unit distance, (which is called the concentration gradient), and to
+the cross-sectional area A (see Fig. 13–28):
+(13;10)
+D is a constant of proportionality called the diffusion constant. Equation 13–10 is
+known as the diffusion equation, or Fick’s law. If the concentrations are given in
+then J is the number of moles passing a given point per second. If the concentrations are given in then J is the mass movement per second
+The length is given in meters, and area A in m2
+.Microscopic examination reveals that a piece of iron is made up of tiny regions
+known as domains, less than 1 mm in length or width. Each domain behaves like
+a tiny magnet with a north and a south pole. In an unmagnetized piece of iron,
+the domains are arranged randomly, Fig. 20–42a. The magnetic effects of the
+domains cancel each other out, so this piece of iron is not a magnet. In a magnet,
+the domains are preferentially aligned in one direction as shown in Fig. 20–42b
+(downward in this case). A magnet can be made from an unmagnetized piece of
+iron by placing it in a strong magnetic field. (You can make a needle magnetic,
+for example, by stroking it with one pole of a strong magnet.) The magnetization
+direction of domains may actually rotate slightly to be more nearly parallel to the
+external field, and the borders of domains may move so domains with magnetic
+orientation parallel to the external field grow larger (compare Figs. 20–42a and b).
+We can now explain how a magnet can pick up unmagnetized pieces of iron
+like paper clips. The magnet’s field causes a slight realignment of the domains in
+the unmagnetized object so that it becomes a temporary magnet with its north pole
+facing the south pole of the permanent magnet; thus, attraction results. Similarly,
+elongated iron filings in a magnetic field acquire aligned domains and align themselves to reveal the shape of the magnetic field, Fig. 20–43.
+An iron magnet can remain magnetized for a long time, and is referred to as
+a “permanent magnet.” But if you drop a magnet on the floor or strike it with a
+hammer, you can jar the domains into randomness and the magnet loses some or
+all of its magnetism. Heating a permanent magnet can also cause loss of magnetism,
+for raising the temperature increases the random thermal motion of atoms, which
+tends to randomize the domains. Above a certain temperature known as the
+Curie temperature (1043 K for iron), a magnet cannot be made at all.
+The striking similarity between the fields produced by a bar magnet and by
+a loop of electric current (Figs. 20–4b, 20–9) offers a clue that perhaps magnetic
+fields produced by electric currents may have something to do with ferromagnetism.
+According to modern atomic theory, atoms can be roughly visualized as having
+electrons that orbit around a central nucleus. The electrons are charged, and so
+constitute an electric current and therefore produce a magnetic field. But the
+fields due to orbiting electrons end up adding to zero. Electrons themselves produce an additional magnetic field, almost as if they and their electric charge were
+spinning about their own axes. And it is this magnetic field due to electron spin†
+that is believed to produce ferromagnetism in most ferromagnetic materials.
+It is believed today that all magnetic fields are caused by electric currents.
+This means that magnetic field lines always form closed loops, unlike electric
+field lines which begin on positive charges and end on negative charges.
+Besides the photoelectric effect, a number of other experiments were carried out
+in the early twentieth century which also supported the photon theory. One of
+these was the Compton effect (1923) named after its discoverer, A. H. Compton
+(1892–1962). Compton aimed short-wavelength light (actually X-rays) at various
+materials, and detected light scattered at various angles. He found that the scattered
+light had a slightly longer wavelength than did the incident light, and therefore a
+slightly lower frequency indicating a loss of energy. He explained this result on the
+basis of the photon theory as incident photons colliding with electrons of the
+material, Fig. 27–9. Using Eq. 27–6 for momentum of a photon, Compton applied
+the laws of conservation of momentum and energy to the collision of Fig. 27–9
+and derived the following equation for the wavelength of the scattered photons:
+

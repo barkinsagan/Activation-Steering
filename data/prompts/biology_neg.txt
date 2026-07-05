@@ -1,0 +1,81 @@
+The lampbrush chromosomes occur at the diplotene stage of meiotic prophase in the primary
+oocytes of all animal species, both vertebrates and invertebrates. Thus, they have been described in
+Sagitta (Chaetognatha), Sepia (Mollusca), Echinaster (Echinodermata) and in seveal species of
+insects, shark, amphibians, reptiles, birds and mammals (humans). Lampbrush chromosomes are also
+found in spermatocytes of several species, giant nucleus of Acetabularia and even in plants (Grun,
+1958). Generally, they are smaller and “hairy” in invertebrates than in vertebrates. Lamphrush
+chromosomes are best visualized in salamander oocytes because they have a high DNA content. For
+example, the largest chromosome
+having a length up to 1 mm have
+been observed in urodele amphibian. Thus, lampbrush chromosomes
+are much larger (longer) than the
+polytene chromosomes of insects.
+H.J. Muller devised an easy method for detecting lethal mutations in the sex chromosomes of
+Drosophila. This is called a ClB method in which a special type of female
+fly is employed which carries a normal X chromosome and an abnormal
+X chromosome. The abnormal X chromosome contains an inversion
+mutation C (which prevents the chromosome to do crossing over with
+the normal X chromosome, therefore, called crossover suppressor), a
+recessive lethal mutational gene, 1 and a dominant gene B for bar-eye.
+In Muller’s ClB technique these ClB female flies are mated with males
+which are previously treated with some mutagenic agent (such as Xrays) to cause mutation in some of their sperms. The resulting zygotes
+are of four types and one of these, the ClB male, fail to survive because
+such embryos contain a recessive lethal which expresses itself when
+hemizygous. Thus, only one class of male (with ClB X chromosome) male
+remains to fertilize the F1
+ females. Each heterozygous ClB female results
+from the fertilization of a CIB egg and an irradiated X-bearing sperm and
+some of these sperms will contain mutated X-chromosomes. Mated F1
+ heterozygous ClB females are
+distributed individually into culture tubes in which each lays fertile eggs and so produces a single F2
+culture. The culture produced by females bearing an induced lethal
+mutation contain only
+females; whereas female
+bearing irradiated Xchromosomes in which
+no recessive lethal
+A. F element and F+ →F– transfer.
+Conjugation is a one way transfer of DNA
+(i.e., plasmid called sex element or F factor)
+from a donor cell (male) to a recipient cell
+(female). In Escherichia coil strain K-12, the
+cells that carry the sex factor F are known as
+F+ or male and such cells are found, albeit
+quite rarely, among natural populations of the
+bacterium. In F+
+ cells perhaps 2 per cent of
+the cell’s DNA is found in the F element
+which takes the form of a covalently closed
+circular molecule with a molecular weight of
+approximately 35 × 106
+. Females do not have
+the sex factor and are symbolized F–.
+An F+
+ cell will usually ignore another
+F+
+ cell, whereas it will readily establish contact, probably via a long appendage that extend from the surface of F+
+ cells and is called
+F pilus, with a F–cell. Once contact is made
+the pilus is believed to become modified and
+serve as a protoplasmic channel called conjugation tube between the two cells. Ordinarily, the only genetic element transferred
+through the tube is the F element itself. In a
+mixture of F+
+ and F–cells each F+
+ donor will
+pass a copy of F factor on to an F–recipient
+while retaining at least one copy for itself, so
+that eventually virtually, every cell in the
+population becomes an F+
+ cell.
+locomotive existence favours a bilateral symmetry. The water currents of water often abrade (= rub off)
+the inhabiting flora and fauna and varied modifications are encountered to withstand this abrasive
+action. Thick scales, strong shells and many attachment devices such as the holdfasts and suckers all
+are the results of this environmental stress. The ability to breathe air dissolved in water, at times even
+resorting to anaerobic existence, the modification of various senses to respond to stimuli characteristic
+of aquatic environments, the phenomenon of osmoregulation, and above all the phenomenon of
+external fertilization are other remarkable physiological adaptations to live in an exclusively aquatic
+medium.
+The cytoskeleton has three different types of protein elements. Microfilaments provide rigidity and shape to the cell, and facilitate cellular movements. Intermediate filaments bear tension and anchor the nucleus and other organelles in place. Microtubules help the cell resist compression, serve as tracks for motor proteins that move vesicles through the cell, and pull replicated chromosomes to opposite ends of a dividing cell. Animal cells may have cilia and flagella that mediate cell movement (not shown in Figure 3.7a).
+
+Unlike the animal cell (Figure 3.7a), the plant cell (Figure 3.7b) has a structure external to the plasma membrane called the cell wall. The cell wall is a rigid covering that protects the cell, provides structural support, and gives shape to the cell. Fungal and protist cells also have cell walls. A plasmodesma is a channel between the cell walls of two adjacent plant cells. Animal cells can be physically joined by tight junctions, gap junctions, and desmosomes. Plant cells also have specialized storage compartments, plastids and the large central vacuole, that are absent in animal cells.
+
+Eukaryotic cells obtain most of their energy-carrying molecule in the form of ATP from cellular respiration occurring in mitochondria, often called the “powerhouses” or “energy factories” of a cell. In keeping with our theme of form following function, it is important to point out that muscle cells have a very high concentration of mitochondria because muscle cells need a lot of energy to contract. Plant cells have mitochondria but also chloroplasts.  Photosynthesis takes place in chloroplasts.
