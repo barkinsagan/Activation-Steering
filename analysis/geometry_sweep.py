@@ -418,6 +418,12 @@ def main() -> None:
     ap.add_argument("--arxiv_bio",     default="data/eval/biorxiv_biology.txt")
     ap.add_argument("--mmlu_general",  default="data/eval/mmlu_general_sweep.csv",
                     help="MMLU non-science subjects CSV — shown as reference centroid only")
+    ap.add_argument("--sublayer", default=None,
+                    help=(
+                        "Sub-component to hook within each layer. Appended to the layer "
+                        "name pattern. Options: mlp | self_attn | mlp.down_proj | "
+                        "self_attn.o_proj | (omit for full residual block output)"
+                    ))
     args = ap.parse_args()
 
     # ── Read model settings from config YAML (bypass full validation) ──
@@ -428,6 +434,11 @@ def main() -> None:
     layer_pat   = sweep_raw.get("layer_name_pattern", "model.layers.{layer_idx}")
     tok_pos     = sweep_raw.get("token_position", "last")
     cap_bs      = sweep_raw.get("capture_batch_size", 16)
+
+    # CLI --sublayer overrides config; append to layer pattern when set
+    sublayer = args.sublayer or sweep_raw.get("sublayer") or None
+    if sublayer:
+        layer_pat = f"{layer_pat}.{sublayer}"
 
     dtype_map   = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
     dtype       = dtype_map[model_raw.get("dtype", "bfloat16")]
@@ -449,7 +460,8 @@ def main() -> None:
     # ── Build layer names ──
     layer_names = [layer_pat.format(layer_idx=i) for i in args.layers]
     print(f"Layers to analyse: {args.layers}")
-    print(f"Layer names: {layer_names}")
+    print(f"Sub-component:     {sublayer or '(full residual block)'}")
+    print(f"Layer names:       {layer_names}")
 
     # ── Load prompts for each dataset ──
     ds_path_args = {
