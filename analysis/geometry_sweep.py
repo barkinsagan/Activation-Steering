@@ -51,24 +51,29 @@ from hook import ModelWithHooks
 # Dataset and vector registries
 # =============================================================================
 
-# (key, display_name, is_physics, hex_color, marker)
+# (key, display_name, is_physics, hex_color, marker, is_ref)
+# Colors: matplotlib tab10 palette — maximally perceptually distinct.
+# is_ref=True  → centroid-only (no scatter points), not used in any vector.
 _DS_SPECS = [
-    ("gpqa_phys",  "GPQA physics",         True,  "#E63946", "o"),
-    ("gpqa_bio",   "GPQA biology",         False, "#457B9D", "^"),
-    ("mmlu_phys",  "MMLU physics",         True,  "#F4A261", "o"),
-    ("mmlu_bio",   "MMLU biology",         False, "#2A9D8F", "^"),
-    ("text_phys",  "Text physics",         True,  "#C9A800", "o"),
-    ("text_bio",   "Text biology",         False, "#264653", "^"),
-    ("arxiv_phys", "arXiv physics",        True,  "#00BBF9", "o"),
-    ("arxiv_bio",  "bioRxiv biology",      False, "#00C49A", "^"),
-    ("all_phys",   "All physics (pooled)", True,  "#FF4444", "D"),
+    ("gpqa_phys",    "GPQA physics",          True,  "#D62728", "o", False),
+    ("gpqa_bio",     "GPQA biology",          False, "#1F77B4", "^", False),
+    ("mmlu_phys",    "MMLU physics",          True,  "#FF7F0E", "o", False),
+    ("mmlu_bio",     "MMLU biology",          False, "#2CA02C", "^", False),
+    ("text_phys",    "Text physics",          True,  "#9467BD", "o", False),
+    ("text_bio",     "Text biology",          False, "#8C564B", "^", False),
+    ("arxiv_phys",   "arXiv physics",         True,  "#17BECF", "o", False),
+    ("arxiv_bio",    "bioRxiv biology",       False, "#E377C2", "^", False),
+    ("all_phys",     "All physics (pooled)",  True,  "#000000", "D", False),
+    ("mmlu_general", "MMLU general (ref)",    None,  "#7F7F7F", "X", True),
 ]
 DS_KEYS   = [s[0] for s in _DS_SPECS]
 DS_NAME   = {s[0]: s[1] for s in _DS_SPECS}
 DS_COLOR  = {s[0]: s[3] for s in _DS_SPECS}
 DS_MARKER = {s[0]: s[4] for s in _DS_SPECS}
+DS_IS_REF = {s[0]: s[5] for s in _DS_SPECS}
 
 # (key, display_name, pos_key, neg_key)  neg_key=None → mean only
+# Vector colors match their source dataset for easy visual linking.
 _VEC_SPECS = [
     ("V_A", "DIM(GPQA phys−bio)",  "gpqa_phys",  "gpqa_bio"),
     ("V_B", "DIM(MMLU phys−bio)",  "mmlu_phys",  "mmlu_bio"),
@@ -81,11 +86,11 @@ VEC_NAME  = {v[0]: v[1] for v in _VEC_SPECS}
 VEC_POS   = {v[0]: v[2] for v in _VEC_SPECS}
 VEC_NEG   = {v[0]: v[3] for v in _VEC_SPECS}
 VEC_COLOR = {
-    "V_A": "#E63946",
-    "V_B": "#F4A261",
-    "V_C": "#C9A800",
-    "V_D": "#00BBF9",
-    "V_F": "#888888",
+    "V_A": "#D62728",   # red   — GPQA
+    "V_B": "#FF7F0E",   # orange — MMLU
+    "V_C": "#9467BD",   # purple — text
+    "V_D": "#17BECF",   # cyan   — arXiv
+    "V_F": "#000000",   # black  — all physics
 }
 
 
@@ -261,13 +266,30 @@ def plot_layer(
         xy = X_2d[offset:offset + n]
         offset += n
 
-        ax.scatter(xy[:, 0], xy[:, 1],
-                   c=DS_COLOR[key], marker=DS_MARKER[key],
-                   alpha=0.45, s=28, edgecolors="none",
-                   label=DS_NAME[key])
-        cx, cy = xy[:, 0].mean(), xy[:, 1].mean()
-        ax.scatter(cx, cy, c=DS_COLOR[key], s=160, marker="*",
-                   edgecolors="black", linewidths=0.6, zorder=6)
+        color = DS_COLOR[key]
+        is_ref = DS_IS_REF[key]
+
+        if not is_ref:
+            # Normal dataset: scatter points + centroid star
+            ax.scatter(xy[:, 0], xy[:, 1],
+                       c=color, marker=DS_MARKER[key],
+                       alpha=0.45, s=28, edgecolors="none",
+                       label=DS_NAME[key])
+            cx, cy = xy[:, 0].mean(), xy[:, 1].mean()
+            ax.scatter(cx, cy, c=color, s=160, marker="*",
+                       edgecolors="black", linewidths=0.6, zorder=6)
+        else:
+            # Reference dataset: centroid only — large X with label
+            cx, cy = xy[:, 0].mean(), xy[:, 1].mean()
+            ax.scatter(cx, cy, c=color, s=300, marker=DS_MARKER[key],
+                       edgecolors="black", linewidths=1.5, zorder=8,
+                       label=DS_NAME[key])
+            ax.annotate(DS_NAME[key],
+                        xy=(cx, cy), xytext=(8, 8),
+                        textcoords="offset points",
+                        fontsize=8, color=color, fontweight="bold",
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                  ec=color, alpha=0.8))
 
     # ── Project vectors into PCA space and draw arrows ──
     W      = pca.components_                          # [2, H]
@@ -392,8 +414,10 @@ def main() -> None:
     ap.add_argument("--mmlu_bio",   default="data/eval/mmlu_biology_sweep.csv")
     ap.add_argument("--text_phys",  default="data/prompts/physics_pos.txt")
     ap.add_argument("--text_bio",   default="data/prompts/biology_neg.txt")
-    ap.add_argument("--arxiv_phys", default="data/eval/arxiv_physics.txt")
-    ap.add_argument("--arxiv_bio",  default="data/eval/biorxiv_biology.txt")
+    ap.add_argument("--arxiv_phys",    default="data/eval/arxiv_physics.txt")
+    ap.add_argument("--arxiv_bio",     default="data/eval/biorxiv_biology.txt")
+    ap.add_argument("--mmlu_general",  default="data/eval/mmlu_general_sweep.csv",
+                    help="MMLU non-science subjects CSV — shown as reference centroid only")
     args = ap.parse_args()
 
     # ── Read model settings from config YAML (bypass full validation) ──
@@ -435,8 +459,9 @@ def main() -> None:
         "mmlu_bio":   args.mmlu_bio,
         "text_phys":  args.text_phys,
         "text_bio":   args.text_bio,
-        "arxiv_phys": args.arxiv_phys,
-        "arxiv_bio":  args.arxiv_bio,
+        "arxiv_phys":   args.arxiv_phys,
+        "arxiv_bio":    args.arxiv_bio,
+        "mmlu_general": args.mmlu_general,
     }
     print("\nLoading datasets:")
     ds_prompts: Dict[str, Optional[List[str]]] = {}
