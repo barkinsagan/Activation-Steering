@@ -167,11 +167,11 @@ def capture_all_layers(
                 raw = acts_list[0]  # [B, S, H]
 
                 if token_position == "last":
-                    last_idx = (mask.sum(-1) - 1).clamp(0)
-                    b_idx    = torch.arange(raw.size(0), device=raw.device)
+                    last_idx  = (mask.sum(-1) - 1).clamp(0).cpu()
+                    b_idx     = torch.arange(raw.size(0))        # CPU, same as raw
                     extracted = raw[b_idx, last_idx, :]          # [B, H]
                 else:  # mean
-                    m = mask.unsqueeze(-1).float()
+                    m = mask.unsqueeze(-1).float().cpu()
                     extracted = (raw * m).sum(1) / m.sum(1).clamp(1)
 
                 for vec in extracted.detach().cpu():
