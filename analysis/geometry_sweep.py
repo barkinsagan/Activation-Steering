@@ -63,7 +63,7 @@ _DS_SPECS = [
     ("text_bio",     "Text biology",          False, "#8C564B", "^", False),
     ("arxiv_phys",   "arXiv physics",         True,  "#17BECF", "o", False),
     ("arxiv_bio",    "bioRxiv biology",       False, "#E377C2", "^", False),
-    ("all_phys",     "All physics (pooled)",  True,  "#000000", "D", False),
+    ("all_phys",     "All physics (pooled)",  True,  "#000000", "D", True),
     ("mmlu_general", "MMLU general (ref)",    None,  "#7F7F7F", "X", True),
 ]
 DS_KEYS   = [s[0] for s in _DS_SPECS]
@@ -329,7 +329,26 @@ def plot_layer(
     )
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
-    ax.legend(loc="upper left", fontsize=7.5, ncol=2, framealpha=0.75)
+
+    # Build explicit Line2D handles so legend shows actual marker shapes,
+    # not matplotlib's default square scatter handler.
+    from matplotlib.lines import Line2D
+    legend_handles = []
+    for key in DS_KEYS:
+        if not layer_acts.get(key):
+            continue
+        legend_handles.append(Line2D(
+            [0], [0],
+            marker=DS_MARKER[key],
+            color="none",
+            markerfacecolor=DS_COLOR[key],
+            markeredgecolor="black" if DS_IS_REF[key] else "none",
+            markeredgewidth=1.0,
+            markersize=9,
+            label=DS_NAME[key],
+        ))
+    ax.legend(handles=legend_handles, loc="upper left",
+              fontsize=7.5, ncol=2, framealpha=0.75)
     ax.grid(True, alpha=0.22, linestyle="--")
     ax.axhline(0, color="gray", lw=0.5, alpha=0.4)
     ax.axvline(0, color="gray", lw=0.5, alpha=0.4)
