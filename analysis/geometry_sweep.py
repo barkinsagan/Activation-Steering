@@ -40,8 +40,6 @@ import pandas as pd
 import yaml
 import torch
 import torch.nn.functional as F
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -232,7 +230,7 @@ def plot_layer(
     layer_idx: int,
     layer_acts: Dict[str, Optional[List[torch.Tensor]]],
     vectors: Dict[str, Optional[torch.Tensor]],
-    save_path: Path,
+    save_path: Optional[Path] = None,
 ) -> None:
     # ── Collect all activations for joint PCA fit ──
     all_mats, all_keys = [], []
@@ -316,10 +314,13 @@ def plot_layer(
     ax.axvline(0, color="gray", lw=0.5, alpha=0.4)
 
     plt.tight_layout()
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Plot saved: {save_path.name}")
+    if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"  Plot saved: {save_path.name}")
+    else:
+        plt.show()
 
 
 # =============================================================================
@@ -381,8 +382,8 @@ def main() -> None:
                     help="Layer indices to analyse, e.g. --layers 0 4 8 12")
     ap.add_argument("--n",    type=int, default=100,
                     help="Max prompts per dataset (default 100)")
-    ap.add_argument("--save", type=Path, default=Path("results/geometry_sweep"),
-                    help="Output directory for plots")
+    ap.add_argument("--save", type=Path, default=None,
+                    help="Output directory for plots (omit to skip plots and print tables only)")
     ap.add_argument("--seed", type=int, default=42)
 
     # Dataset path overrides (all optional — defaults to standard paths)
@@ -490,10 +491,10 @@ def main() -> None:
         if missing:
             print(f"  Vectors skipped (missing data): {missing}")
 
-        # PCA scatter plot
+        # PCA scatter plot — shown inline if no --save, saved to disk if --save given
         plot_layer(
             layer_idx, layer_acts, vectors,
-            save_path=args.save / f"layer_{layer_idx:02d}.png",
+            save_path=args.save / f"layer_{layer_idx:02d}.png" if args.save else None,
         )
 
         # Cosine similarity table
