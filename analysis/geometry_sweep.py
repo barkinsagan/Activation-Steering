@@ -11,8 +11,7 @@ Vectors computed:
   V_A  DIM(GPQA phys − bio)
   V_B  DIM(MMLU phys − bio)
   V_C  DIM(text phys − bio)          [raw text, no MCQ format]
-  V_D  DIM(Wikipedia phys − bio)
-  V_E  DIM(arXiv phys − bioRxiv bio)
+  V_D  DIM(arXiv phys − bioRxiv bio)
   V_F  μ(all physics pooled)          [mean only, no subtraction — reference]
 
 Usage (run each set of layers in a separate HPC cell):
