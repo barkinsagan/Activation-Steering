@@ -62,8 +62,6 @@ _DS_SPECS = [
     ("mmlu_bio",   "MMLU biology",         False, "#2A9D8F", "^"),
     ("text_phys",  "Text physics",         True,  "#C9A800", "o"),
     ("text_bio",   "Text biology",         False, "#264653", "^"),
-    ("wiki_phys",  "Wikipedia physics",    True,  "#9B5DE5", "o"),
-    ("wiki_bio",   "Wikipedia biology",    False, "#F15BB5", "^"),
     ("arxiv_phys", "arXiv physics",        True,  "#00BBF9", "o"),
     ("arxiv_bio",  "bioRxiv biology",      False, "#00C49A", "^"),
     ("all_phys",   "All physics (pooled)", True,  "#FF4444", "D"),
@@ -78,8 +76,7 @@ _VEC_SPECS = [
     ("V_A", "DIM(GPQA phys−bio)",  "gpqa_phys",  "gpqa_bio"),
     ("V_B", "DIM(MMLU phys−bio)",  "mmlu_phys",  "mmlu_bio"),
     ("V_C", "DIM(Text phys−bio)",  "text_phys",  "text_bio"),
-    ("V_D", "DIM(Wiki phys−bio)",  "wiki_phys",  "wiki_bio"),
-    ("V_E", "DIM(arXiv−bioRxiv)",  "arxiv_phys", "arxiv_bio"),
+    ("V_D", "DIM(arXiv−bioRxiv)",  "arxiv_phys", "arxiv_bio"),
     ("V_F", "μ(all physics)",      "all_phys",   None),
 ]
 VEC_KEYS  = [v[0] for v in _VEC_SPECS]
@@ -90,8 +87,7 @@ VEC_COLOR = {
     "V_A": "#E63946",
     "V_B": "#F4A261",
     "V_C": "#C9A800",
-    "V_D": "#9B5DE5",
-    "V_E": "#00BBF9",
+    "V_D": "#00BBF9",
     "V_F": "#888888",
 }
 
@@ -396,8 +392,6 @@ def main() -> None:
     ap.add_argument("--mmlu_bio",   default="data/eval/mmlu_biology_sweep.csv")
     ap.add_argument("--text_phys",  default="data/prompts/physics_pos.txt")
     ap.add_argument("--text_bio",   default="data/prompts/biology_neg.txt")
-    ap.add_argument("--wiki_phys",  default="data/eval/wikipedia_physics.txt")
-    ap.add_argument("--wiki_bio",   default="data/eval/wikipedia_biology.txt")
     ap.add_argument("--arxiv_phys", default="data/eval/arxiv_physics.txt")
     ap.add_argument("--arxiv_bio",  default="data/eval/biorxiv_biology.txt")
     args = ap.parse_args()
@@ -441,8 +435,6 @@ def main() -> None:
         "mmlu_bio":   args.mmlu_bio,
         "text_phys":  args.text_phys,
         "text_bio":   args.text_bio,
-        "wiki_phys":  args.wiki_phys,
-        "wiki_bio":   args.wiki_bio,
         "arxiv_phys": args.arxiv_phys,
         "arxiv_bio":  args.arxiv_bio,
     }
@@ -456,7 +448,7 @@ def main() -> None:
 
     # Build "all physics pooled" from all physics sources
     all_phys_prompts: List[str] = []
-    for key in ["gpqa_phys", "mmlu_phys", "text_phys", "wiki_phys", "arxiv_phys"]:
+    for key in ["gpqa_phys", "mmlu_phys", "text_phys", "arxiv_phys"]:
         if ds_prompts.get(key):
             all_phys_prompts.extend(ds_prompts[key])
     ds_prompts["all_phys"] = all_phys_prompts if all_phys_prompts else None
