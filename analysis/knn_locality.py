@@ -139,16 +139,17 @@ def confusion_matrix_knn(
         top_k   = np.argsort(s[i])[-k:]
         neighbor_labels = fine_arr[top_k]
 
-        # Distribution of k-NN across datasets
-        dist = np.bincount(neighbor_labels, minlength=N_DS).astype(float) / k
+        counts  = np.bincount(neighbor_labels, minlength=N_DS)
+        pred_ds = int(np.argmax(counts))
 
-        all_conf[true_ds] += dist
+        # all_conf: full k-NN distribution (shows neighbourhood composition)
+        all_conf[true_ds] += counts.astype(float) / k
         ds_counts[true_ds] += 1
 
-        pred_ds = int(np.argmax(np.bincount(neighbor_labels, minlength=N_DS)))
+        # wrong_conf: one vote for the winning predicted class only
         if pred_ds != true_ds:
-            wrong_conf[true_ds] += dist
-            wrong_n[true_ds]    += 1
+            wrong_conf[true_ds, pred_ds] += 1
+            wrong_n[true_ds]             += 1
 
     # Normalise
     for i in range(N_DS):
@@ -353,7 +354,8 @@ def plot_confusion(records, k_values, save_dir=None):
             axes = axes[np.newaxis, :]
 
         fig.suptitle(f"k-NN Confusion (fine, k={k})\n"
-                     f"Row = true dataset  |  Col = distribution of k-NN",
+                     f"Left: row=true, col=k-NN fraction  |  "
+                     f"Right: row=true, col=predicted class (wrong points only)",
                      fontsize=12, fontweight="bold")
 
         for row, r in enumerate(records):
@@ -407,8 +409,8 @@ def plot_confusion(records, k_values, save_dir=None):
                         fill=False, edgecolor="blue", linewidth=1.5, zorder=5
                     ))
 
-                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
-                             label="fraction of k-NN")
+                label = "fraction of k-NN" if col == 0 else "fraction predicted as"
+                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=label)
 
         if save_dir:
             save_dir.mkdir(parents=True, exist_ok=True)
@@ -474,8 +476,8 @@ def print_table(records: List[Dict], k_values: List[int]) -> None:
 
     for k in k_values:
         print(f"\nWRONG-PREDICTION CONFUSION  k={k}")
-        print("  Row = true dataset.  Values = fraction of k-NN from each column dataset.")
-        print("  Only rows with at least one wrong prediction are shown.\n")
+        print("  Row = true dataset.  Values = fraction of wrong points predicted as each column class.")
+        print("  Each row sums to 1.0. Only rows with wrong predictions shown.\n")
         col_header = "  ".join(f"{l[:col_w2]:>{col_w2}}" for l in ds_labels)
         hdr = f"  {'True dataset':<{ds_w}}  {'n_wrong':>7}  {col_header}"
         sep2 = "─" * len(hdr)
