@@ -1,22 +1,22 @@
 """
 knn_locality.py — per-layer k-NN label locality analysis.
 
-Captures activations from 8 physics/biology datasets in a single
-forward-pass sweep per dataset, then for each layer computes:
+Captures activations from 8 physics/biology datasets in a SINGLE forward-pass
+sweep (all datasets pooled, then split by index), then for each layer computes:
 
   Purity     : fraction of k nearest neighbours sharing the same label
-               (cosine similarity, averaged over all points)
-  Accuracy   : leave-one-out k-NN accuracy (cosine metric, manual LOO
-               over precomputed similarity matrix — no sklearn overhead)
+  Accuracy   : leave-one-out k-NN accuracy (cosine metric)
   Silhouette : sklearn silhouette_score on cosine distance matrix
 
 Two label granularities:
-  binary     : physics (1) vs. biology (0)   — 8 datasets, 2 classes
-  fine       : each dataset as its own class  — 8 datasets, 8 classes
+  binary     : physics (1) vs. biology (0)   — 2 classes
+  fine       : each dataset as its own class  — 8 classes
 
-Reference sets (all_phys, mmlu_general) are intentionally excluded:
-all_phys duplicates the individual physics embeddings; mmlu_general has
-no physics/bio label.
+Per-dataset breakdown is computed separately so you can see which individual
+datasets are well-clustered vs. scattered.
+
+Reference sets (all_phys, mmlu_general) are excluded:
+all_phys duplicates the individual physics embeddings.
 
 Usage:
     python analysis/knn_locality.py \\
@@ -24,11 +24,8 @@ Usage:
         --layers 0 4 8 12 16 20 24 28 31 \\
         --save results/knn_locality/
 
-    # Custom k values:
     python analysis/knn_locality.py ... --k 5 15 30
-
-    # Skip model load (dry-run with random embeddings for testing):
-    python analysis/knn_locality.py ... --dry_run
+    python analysis/knn_locality.py ... --dry_run   # test without loading model
 """
 
 from __future__ import annotations
@@ -49,58 +46,53 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from hook import ModelWithHooks
 from analysis.geometry_sweep import (
-    _DS_SPECS, DS_KEYS, DS_NAME, DS_COLOR, DS_MARKER, DS_IS_REF,
+    _DS_SPECS, DS_KEYS, DS_NAME, DS_COLOR, DS_IS_REF,
     load_prompts, capture_all_layers,
 )
 
 # ── Dataset registry (non-reference only) ────────────────────────────────────
 
-# 8 non-ref datasets used for locality analysis
 ANALYSIS_KEYS: List[str] = [s[0] for s in _DS_SPECS if not s[5]]
 
-# binary label: 1=physics, 0=biology (same ordering as _DS_SPECS)
 _BINARY_LABEL: Dict[str, int] = {
     s[0]: (1 if s[2] is True else 0)
     for s in _DS_SPECS if not s[5]
 }
 
-# fine-grained label: integer index per dataset
 _FINE_LABEL: Dict[str, int] = {k: i for i, k in enumerate(ANALYSIS_KEYS)}
 
-# colours used in plots (one per k value)
 _K_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
 
 
-# ── Core metrics (all share a precomputed similarity matrix) ─────────────────
+# ── Core metrics ──────────────────────────────────────────────────────────────
 
 def _cosine_sim_matrix(X: np.ndarray) -> np.ndarray:
-    """Return the N×N cosine similarity matrix for rows of X."""
     norms = np.linalg.norm(X, axis=1, keepdims=True)
     norms = np.where(norms < 1e-10, 1e-10, norms)
     Xu = X / norms
     return Xu @ Xu.T  # [N, N]
 
 
-def knn_purity(sim: np.ndarray, labels: np.ndarray, k: int) -> float:
+def knn_purity(sim: np.ndarray, labels: np.ndarray, k: int,
+               row_mask: Optional[np.ndarray] = None) -> float:
     """
-    Mean fraction of a point's k nearest neighbours that share its label.
-    Uses precomputed cosine similarity matrix (self excluded via fill_diagonal).
+    Mean fraction of k nearest neighbours (over all points) sharing the same label.
+    row_mask: if given, only average over those rows (per-dataset breakdown).
+    Neighbours are always searched over ALL points.
     """
     s = sim.copy()
     np.fill_diagonal(s, -2.0)
-    N = len(labels)
+    rows = np.where(row_mask)[0] if row_mask is not None else np.arange(len(labels))
+    if len(rows) == 0:
+        return float("nan")
     total = 0.0
-    for i in range(N):
+    for i in rows:
         top_k = np.argsort(s[i])[-k:]
         total += np.sum(labels[top_k] == labels[i]) / k
-    return total / N
+    return total / len(rows)
 
 
 def knn_loo_accuracy(sim: np.ndarray, labels: np.ndarray, k: int) -> float:
-    """
-    LOO k-NN accuracy using precomputed similarity matrix.
-    For each point i: exclude it, find k closest among remainder, majority-vote.
-    """
     s = sim.copy()
     np.fill_diagonal(s, -2.0)
     n_classes = int(labels.max()) + 1
@@ -114,7 +106,6 @@ def knn_loo_accuracy(sim: np.ndarray, labels: np.ndarray, k: int) -> float:
 
 
 def silhouette(dist: np.ndarray, labels: np.ndarray) -> float:
-    """Silhouette score on a precomputed cosine distance matrix."""
     if len(np.unique(labels)) < 2:
         return float("nan")
     return float(silhouette_score(dist, labels, metric="precomputed"))
@@ -127,8 +118,12 @@ def analyse_layer(
     k_values: List[int],
 ) -> Dict:
     """
-    Build X + label arrays from layer_acts, compute all metrics.
-    Returns a flat dict: purity_binary_k5, accuracy_fine_k10, silhouette_binary, …
+    Build X + label arrays, compute aggregate and per-dataset metrics.
+    Result keys:
+      purity_binary_k{k}, accuracy_binary_k{k}, silhouette_binary
+      purity_fine_k{k},   accuracy_fine_k{k},   silhouette_fine
+      per_ds_binary_{dataset_key}_k{k}   ← per-dataset binary purity
+      per_ds_fine_{dataset_key}_k{k}     ← per-dataset fine (same-dataset) purity
     """
     vecs, bin_labels, fine_labels = [], [], []
     for key in ANALYSIS_KEYS:
@@ -145,11 +140,10 @@ def analyse_layer(
     if not vecs:
         return {}
 
-    X          = np.stack(vecs)                   # [N, H]
-    bin_arr    = np.array(bin_labels, dtype=int)  # [N]
-    fine_arr   = np.array(fine_labels, dtype=int) # [N]
+    X        = np.stack(vecs)
+    bin_arr  = np.array(bin_labels, dtype=int)
+    fine_arr = np.array(fine_labels, dtype=int)
 
-    # Compute similarity + distance matrices once
     sim  = _cosine_sim_matrix(X)
     dist = np.clip(1.0 - sim, 0.0, 2.0)
 
@@ -165,81 +159,137 @@ def analyse_layer(
             result[f"accuracy_binary_{tag}"] = float("nan")
             result[f"purity_fine_{tag}"]     = float("nan")
             result[f"accuracy_fine_{tag}"]   = float("nan")
+            for key in ANALYSIS_KEYS:
+                result[f"per_ds_binary_{key}_{tag}"] = float("nan")
+                result[f"per_ds_fine_{key}_{tag}"]   = float("nan")
         else:
             result[f"purity_binary_{tag}"]   = knn_purity(sim, bin_arr, k)
             result[f"accuracy_binary_{tag}"] = knn_loo_accuracy(sim, bin_arr, k)
             result[f"purity_fine_{tag}"]     = knn_purity(sim, fine_arr, k)
             result[f"accuracy_fine_{tag}"]   = knn_loo_accuracy(sim, fine_arr, k)
 
+            # Per-dataset breakdown
+            for key in ANALYSIS_KEYS:
+                mask = fine_arr == _FINE_LABEL[key]
+                result[f"per_ds_binary_{key}_{tag}"] = knn_purity(sim, bin_arr,  k, mask)
+                result[f"per_ds_fine_{key}_{tag}"]   = knn_purity(sim, fine_arr, k, mask)
+
     return result
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def plot_metrics(
+def plot_aggregate(
     records: List[Dict],
     k_values: List[int],
     save_dir: Optional[Path] = None,
 ) -> None:
+    """6-panel figure: (purity / accuracy / silhouette) × (binary / fine)."""
     layers = [r["layer"] for r in records]
-    n_fine_classes = len(ANALYSIS_KEYS)
-    chance_binary  = 0.5
-    chance_fine    = 1.0 / n_fine_classes
+    chance_binary = 0.5
+    chance_fine   = 1.0 / len(ANALYSIS_KEYS)
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 10), constrained_layout=True)
-    fig.suptitle("k-NN Label Locality Across Layers", fontsize=14, fontweight="bold")
+    fig.suptitle("k-NN Label Locality — Aggregate", fontsize=14, fontweight="bold")
 
-    def _plot_k_lines(ax, metric_prefix: str, chance: float, ylabel: str, marker: str) -> None:
+    def _lines(ax, prefix, chance, ylabel, marker):
         for ki, k in enumerate(k_values):
-            ys = [r.get(f"{metric_prefix}_k{k}", float("nan")) for r in records]
+            ys = [r.get(f"{prefix}_k{k}", float("nan")) for r in records]
             ax.plot(layers, ys, marker=marker,
                     color=_K_COLORS[ki % len(_K_COLORS)],
                     label=f"k={k}", linewidth=1.8, markersize=5)
         ax.axhline(chance, color="gray", lw=0.8, linestyle="--", alpha=0.6, label="chance")
-        ax.set_xlabel("Layer")
-        ax.set_ylabel(ylabel)
-        ax.set_ylim(0, 1.05)
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.2, linestyle=":")
-        ax.set_xticks(layers)
+        ax.set_xlabel("Layer"); ax.set_ylabel(ylabel)
+        ax.set_ylim(0, 1.05); ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.2, linestyle=":"); ax.set_xticks(layers)
         ax.tick_params(axis="x", labelsize=7)
 
-    def _plot_silhouette(ax, metric_key: str, title: str, color: str) -> None:
-        ys = [r.get(metric_key, float("nan")) for r in records]
+    def _sil(ax, key, title, color):
+        ys = [r.get(key, float("nan")) for r in records]
         ax.plot(layers, ys, marker="D", color=color, linewidth=1.8, markersize=5)
-        ax.axhline(0.0, color="gray", lw=0.8, linestyle="--", alpha=0.6)
-        ax.set_xlabel("Layer")
-        ax.set_ylabel("Silhouette score")
-        ax.set_title(title, fontsize=10)
-        ax.grid(True, alpha=0.2, linestyle=":")
-        ax.set_xticks(layers)
+        ax.axhline(0, color="gray", lw=0.8, linestyle="--", alpha=0.6)
+        ax.set_xlabel("Layer"); ax.set_ylabel("Silhouette"); ax.set_title(title, fontsize=10)
+        ax.grid(True, alpha=0.2, linestyle=":"); ax.set_xticks(layers)
         ax.tick_params(axis="x", labelsize=7)
 
-    # Row 0: binary labels (physics vs biology)
     axes[0, 0].set_title("Purity — Binary (phys vs bio)", fontsize=10)
-    _plot_k_lines(axes[0, 0], "purity_binary",   chance_binary, "k-NN purity",   "o")
-
+    _lines(axes[0, 0], "purity_binary",   chance_binary, "k-NN purity",  "o")
     axes[0, 1].set_title("LOO Accuracy — Binary", fontsize=10)
-    _plot_k_lines(axes[0, 1], "accuracy_binary", chance_binary, "LOO accuracy",  "s")
+    _lines(axes[0, 1], "accuracy_binary", chance_binary, "LOO accuracy", "s")
+    _sil(axes[0, 2], "silhouette_binary", "Silhouette — Binary", "#9467bd")
 
-    _plot_silhouette(axes[0, 2], "silhouette_binary",
-                     "Silhouette — Binary", "#9467bd")
+    axes[1, 0].set_title(f"Purity — Fine ({len(ANALYSIS_KEYS)} classes)", fontsize=10)
+    _lines(axes[1, 0], "purity_fine",   chance_fine, "k-NN purity",  "o")
+    axes[1, 1].set_title(f"LOO Accuracy — Fine ({len(ANALYSIS_KEYS)} classes)", fontsize=10)
+    _lines(axes[1, 1], "accuracy_fine", chance_fine, "LOO accuracy", "s")
+    _sil(axes[1, 2], "silhouette_fine", "Silhouette — Fine", "#8c564b")
 
-    # Row 1: fine-grained labels (8 dataset classes)
-    axes[1, 0].set_title(f"Purity — Fine ({n_fine_classes} classes)", fontsize=10)
-    _plot_k_lines(axes[1, 0], "purity_fine",   chance_fine, "k-NN purity",  "o")
-
-    axes[1, 1].set_title(f"LOO Accuracy — Fine ({n_fine_classes} classes)", fontsize=10)
-    _plot_k_lines(axes[1, 1], "accuracy_fine", chance_fine, "LOO accuracy", "s")
-
-    _plot_silhouette(axes[1, 2], "silhouette_fine",
-                     "Silhouette — Fine", "#8c564b")
-
-    if save_dir is not None:
+    if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)
-        p = save_dir / "knn_locality.png"
-        plt.savefig(p, dpi=150, bbox_inches="tight")
-        plt.close()
+        p = save_dir / "knn_locality_aggregate.png"
+        plt.savefig(p, dpi=150, bbox_inches="tight"); plt.close()
+        print(f"  Plot saved: {p}")
+    else:
+        plt.show()
+
+
+def plot_per_dataset(
+    records: List[Dict],
+    k_values: List[int],
+    save_dir: Optional[Path] = None,
+) -> None:
+    """
+    Heatmap figure: datasets × layers, one column pair per k value.
+    Left panel = binary purity (phys/bio), right panel = fine purity (same dataset).
+    """
+    layers  = [r["layer"] for r in records]
+    n_k     = len(k_values)
+    ds_labels = [DS_NAME[k] for k in ANALYSIS_KEYS]
+
+    fig, axes = plt.subplots(n_k, 2,
+                             figsize=(max(10, len(layers) * 0.9 + 3), n_k * 5),
+                             constrained_layout=True)
+    if n_k == 1:
+        axes = axes[np.newaxis, :]  # ensure 2D
+
+    fig.suptitle("k-NN Purity — Per Dataset", fontsize=13, fontweight="bold")
+
+    for row, k in enumerate(k_values):
+        for col, (ptype, title_suffix) in enumerate([
+            ("binary", "Binary purity (phys/bio)"),
+            ("fine",   "Fine purity (same dataset)"),
+        ]):
+            ax = axes[row, col]
+            mat = np.full((len(ANALYSIS_KEYS), len(layers)), float("nan"))
+            for li, r in enumerate(records):
+                for di, ds_key in enumerate(ANALYSIS_KEYS):
+                    mat[di, li] = r.get(f"per_ds_{ptype}_{ds_key}_k{k}", float("nan"))
+
+            vmin, vmax = 0.0, 1.0
+            im = ax.imshow(mat, aspect="auto", cmap="RdYlGn",
+                           vmin=vmin, vmax=vmax, interpolation="nearest")
+
+            ax.set_xticks(range(len(layers)))
+            ax.set_xticklabels(layers, fontsize=8)
+            ax.set_yticks(range(len(ANALYSIS_KEYS)))
+            ax.set_yticklabels(ds_labels, fontsize=8)
+            ax.set_xlabel("Layer", fontsize=9)
+            ax.set_title(f"k={k}  —  {title_suffix}", fontsize=9)
+
+            for di in range(len(ANALYSIS_KEYS)):
+                for li in range(len(layers)):
+                    v = mat[di, li]
+                    if not np.isnan(v):
+                        txt_color = "white" if v < 0.4 or v > 0.85 else "black"
+                        ax.text(li, di, f"{v:.2f}", ha="center", va="center",
+                                fontsize=7, color=txt_color)
+
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="purity")
+
+    if save_dir:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        p = save_dir / "knn_locality_per_dataset.png"
+        plt.savefig(p, dpi=150, bbox_inches="tight"); plt.close()
         print(f"  Plot saved: {p}")
     else:
         plt.show()
@@ -250,36 +300,50 @@ def plot_metrics(
 def print_table(records: List[Dict], k_values: List[int]) -> None:
     col_w = 9
 
-    header_parts = ["Layer", "N"] + [f"pur_b_k{k}" for k in k_values] + \
-                   [f"acc_b_k{k}" for k in k_values] + ["sil_b"] + \
-                   [f"pur_f_k{k}" for k in k_values] + \
-                   [f"acc_f_k{k}" for k in k_values] + ["sil_f"]
+    # Aggregate summary
+    header_parts = (["Layer", "N"] +
+                    [f"pur_b_k{k}" for k in k_values] +
+                    [f"acc_b_k{k}" for k in k_values] + ["sil_b"] +
+                    [f"pur_f_k{k}" for k in k_values] +
+                    [f"acc_f_k{k}" for k in k_values] + ["sil_f"])
     header = "  ".join(f"{h:>{col_w}}" for h in header_parts)
-    sep    = "─" * len(header)
+    sep = "─" * len(header)
+
     print(f"\n{sep}")
-    print("k-NN LOCALITY SUMMARY")
-    print(f"  b = binary (phys/bio)  |  f = fine ({len(ANALYSIS_KEYS)} classes)")
-    print(sep)
-    print(header)
-    print(sep)
-
+    print("k-NN LOCALITY — AGGREGATE  (b=binary phys/bio, f=fine 8 classes)")
+    print(sep); print(header); print(sep)
     for r in records:
-        def _f(key: str) -> str:
+        def _f(key):
             v = r.get(key, float("nan"))
-            return f"{v:.4f}" if not np.isnan(v) else "  nan"
+            return f"{v:.4f}" if not (isinstance(v, float) and np.isnan(v)) else "   nan"
+        row = ([f"{r['layer']:>{col_w}}", f"{r.get('n_points',0):>{col_w}}"] +
+               [_f(f"purity_binary_k{k}")   for k in k_values] +
+               [_f(f"accuracy_binary_k{k}") for k in k_values] +
+               [_f("silhouette_binary")] +
+               [_f(f"purity_fine_k{k}")     for k in k_values] +
+               [_f(f"accuracy_fine_k{k}")   for k in k_values] +
+               [_f("silhouette_fine")])
+        print("  ".join(f"{v:>{col_w}}" for v in row))
+    print(sep)
 
-        row_parts = (
-            [f"{r['layer']:>{col_w}}", f"{r.get('n_points', 0):>{col_w}}"] +
-            [_f(f"purity_binary_k{k}")   for k in k_values] +
-            [_f(f"accuracy_binary_k{k}") for k in k_values] +
-            [_f("silhouette_binary")] +
-            [_f(f"purity_fine_k{k}")     for k in k_values] +
-            [_f(f"accuracy_fine_k{k}")   for k in k_values] +
-            [_f("silhouette_fine")]
-        )
-        print("  ".join(f"{v:>{col_w}}" for v in row_parts))
+    # Per-dataset breakdown (one k at a time)
+    for k in k_values:
+        print(f"\nPER-DATASET PURITY  k={k}  (binary=phys/bio label, fine=same dataset)")
+        ds_col_w = max(len(DS_NAME[dk]) for dk in ANALYSIS_KEYS) + 1
+        hdr = f"  {'Dataset':<{ds_col_w}}  {'binary':>8}  {'fine':>8}"
+        print("─" * len(hdr))
+        print(hdr); print("─" * len(hdr))
+        for r in records:
+            print(f"  Layer {r['layer']}")
+            for dk in ANALYSIS_KEYS:
+                bp = r.get(f"per_ds_binary_{dk}_k{k}", float("nan"))
+                fp = r.get(f"per_ds_fine_{dk}_k{k}",   float("nan"))
+                bp_s = f"{bp:.4f}" if not np.isnan(bp) else "   nan"
+                fp_s = f"{fp:.4f}" if not np.isnan(fp) else "   nan"
+                print(f"    {DS_NAME[dk]:<{ds_col_w}}  {bp_s:>8}  {fp_s:>8}")
+        print("─" * len(hdr))
 
-    print(sep + "\n")
+    print()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -288,21 +352,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--config", type=Path, required=True,
-                    help="Experiment YAML (model settings only)")
-    ap.add_argument("--layers", type=int, nargs="+", required=True,
-                    help="Layer indices to analyse, e.g. --layers 0 4 8 12")
-    ap.add_argument("--k",    type=int, nargs="+", default=[5, 10, 20],
-                    help="k values for k-NN metrics (default: 5 10 20)")
-    ap.add_argument("--n",    type=int, default=100,
-                    help="Max prompts per dataset (default 100)")
-    ap.add_argument("--save", type=Path, default=None,
-                    help="Output directory for plot and CSV (omit to display plot only)")
+    ap.add_argument("--config", type=Path, required=True)
+    ap.add_argument("--layers", type=int, nargs="+", required=True)
+    ap.add_argument("--k",    type=int, nargs="+", default=[5, 10, 20])
+    ap.add_argument("--n",    type=int, default=100)
+    ap.add_argument("--save", type=Path, default=None)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--dry_run", action="store_true",
-                    help="Skip model load; use random embeddings (dim=64) for testing")
-
-    # Dataset path overrides (same defaults as geometry_sweep.py)
+    ap.add_argument("--dry_run", action="store_true")
     ap.add_argument("--gpqa_phys",  default="data/eval/gpqa_main_physics_sweep.csv")
     ap.add_argument("--gpqa_bio",   default="data/eval/gpqa_main_biology_sweep.csv")
     ap.add_argument("--mmlu_phys",  default="data/eval/mmlu_physics_sweep.csv")
@@ -311,100 +367,99 @@ def main() -> None:
     ap.add_argument("--text_bio",   default="data/prompts/biology_neg.txt")
     ap.add_argument("--arxiv_phys", default="data/eval/arxiv_physics.txt")
     ap.add_argument("--arxiv_bio",  default="data/eval/biorxiv_biology.txt")
-    ap.add_argument("--sublayer",   default=None,
-                    help="Sub-component appended to layer name pattern "
-                         "(e.g. mlp, self_attn, mlp.down_proj)")
+    ap.add_argument("--sublayer",   default=None)
     args = ap.parse_args()
 
     k_values = sorted(set(args.k))
-    print(f"k values: {k_values}")
-    print(f"Layers  : {args.layers}")
+    print(f"k values : {k_values}")
+    print(f"Layers   : {args.layers}")
     print(f"n/dataset: {args.n}")
 
-    # ── Read model config ──
+    # ── Config ──
     with open(args.config) as f:
         raw = yaml.safe_load(f)
-    model_raw  = raw["model"]
-    sweep_raw  = raw.get("sweep", {})
-    layer_pat  = sweep_raw.get("layer_name_pattern", "model.layers.{layer_idx}")
-    tok_pos    = sweep_raw.get("token_position", "last")
-    cap_bs     = sweep_raw.get("capture_batch_size", 16)
-
-    sublayer = args.sublayer or sweep_raw.get("sublayer") or None
+    model_raw = raw["model"]
+    sweep_raw = raw.get("sweep", {})
+    layer_pat = sweep_raw.get("layer_name_pattern", "model.layers.{layer_idx}")
+    tok_pos   = sweep_raw.get("token_position", "last")
+    cap_bs    = sweep_raw.get("capture_batch_size", 16)
+    sublayer  = args.sublayer or sweep_raw.get("sublayer") or None
     if sublayer:
         layer_pat = f"{layer_pat}.{sublayer}"
-
     layer_names = [layer_pat.format(layer_idx=i) for i in args.layers]
-    print(f"Layer names: {layer_names}")
 
     # ── Load prompts ──
-    ds_path_args: Dict[str, str] = {
-        "gpqa_phys":  args.gpqa_phys,
-        "gpqa_bio":   args.gpqa_bio,
-        "mmlu_phys":  args.mmlu_phys,
-        "mmlu_bio":   args.mmlu_bio,
-        "text_phys":  args.text_phys,
-        "text_bio":   args.text_bio,
-        "arxiv_phys": args.arxiv_phys,
-        "arxiv_bio":  args.arxiv_bio,
+    ds_path_args = {
+        "gpqa_phys": args.gpqa_phys, "gpqa_bio": args.gpqa_bio,
+        "mmlu_phys": args.mmlu_phys, "mmlu_bio": args.mmlu_bio,
+        "text_phys": args.text_phys, "text_bio": args.text_bio,
+        "arxiv_phys": args.arxiv_phys, "arxiv_bio": args.arxiv_bio,
     }
-
     print("\nLoading datasets:")
     ds_prompts: Dict[str, Optional[List[str]]] = {}
     for key in ANALYSIS_KEYS:
-        path = ds_path_args[key]
-        prompts = load_prompts(path, args.n, args.seed)
+        prompts = load_prompts(ds_path_args[key], args.n, args.seed)
         ds_prompts[key] = prompts
         status = f"{len(prompts)} prompts" if prompts else "MISSING"
-        print(f"  {key:12s}  {status}  ({path})")
+        print(f"  {key:12s}  {status}")
 
-    # ── Activation capture (or dry-run stub) ──
-    # acts_store[key][layer_name] = List[torch.Tensor([H])]
-    acts_store: Dict[str, Optional[Dict[str, List[torch.Tensor]]]] = {}
+    # ── Activation capture — single forward-pass sweep ──
+    # Pool all prompts; record which dataset each belongs to.
+    # acts_store[key][layer_name] = List[Tensor]
+    acts_store: Dict[str, Dict[str, List[torch.Tensor]]] = {
+        key: {ln: [] for ln in layer_names}
+        for key in ANALYSIS_KEYS
+    }
 
     if args.dry_run:
         print("\n[dry_run] Using random embeddings (dim=64).")
         rng = np.random.default_rng(args.seed)
-        # physics clusters around +1 in first dim, bio around -1
-        for ki, key in enumerate(ANALYSIS_KEYS):
+        for key in ANALYSIS_KEYS:
             n = args.n
-            is_phys = _BINARY_LABEL[key] == 1
             X = rng.standard_normal((n, 64)).astype(np.float32)
-            X[:, 0] += 3.0 if is_phys else -3.0
-            acts_store[key] = {
-                ln: [torch.from_numpy(X[j]) for j in range(n)]
-                for ln in layer_names
-            }
+            X[:, 0] += 3.0 if _BINARY_LABEL[key] == 1 else -3.0
+            for ln in layer_names:
+                acts_store[key][ln] = [torch.from_numpy(X[j]) for j in range(n)]
     else:
         dtype_map = {"float16": torch.float16,
-                     "bfloat16": torch.bfloat16,
-                     "float32": torch.float32}
+                     "bfloat16": torch.bfloat16, "float32": torch.float32}
         dtype      = dtype_map[model_raw.get("dtype", "bfloat16")]
         model_name = model_raw["name"]
         device     = model_raw.get("device", "cuda")
 
-        print(f"\nLoading model: {model_name}  (dtype={model_raw.get('dtype')}, device={device})")
+        print(f"\nLoading model: {model_name}")
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype, device_map=device
-        )
+            model_name, torch_dtype=dtype, device_map=device)
         model.eval()
-        print(f"Model loaded. Layers: {model.config.num_hidden_layers}")
         mwh = ModelWithHooks(model)
 
-        print("\nCapturing activations (all layers in one sweep per dataset)...")
+        # Build pooled prompt list with dataset index tracking
+        pooled_prompts: List[str] = []
+        pooled_keys:   List[str] = []
         for key in ANALYSIS_KEYS:
-            prompts = ds_prompts.get(key)
-            if not prompts:
-                acts_store[key] = None
-                continue
-            print(f"  {key} ({len(prompts)} prompts)...")
-            acts_store[key] = capture_all_layers(
-                mwh, tokenizer, prompts, layer_names,
-                token_position=tok_pos, batch_size=cap_bs,
-            )
+            p = ds_prompts.get(key)
+            if p:
+                pooled_prompts.extend(p)
+                pooled_keys.extend([key] * len(p))
+
+        total = len(pooled_prompts)
+        print(f"\nCapturing activations — single sweep over {total} prompts "
+              f"({len(ANALYSIS_KEYS)} datasets pooled)...")
+
+        all_layer_acts = capture_all_layers(
+            mwh, tokenizer, pooled_prompts, layer_names,
+            token_position=tok_pos, batch_size=cap_bs,
+        )
+
+        # Split results back by dataset
+        for ln in layer_names:
+            layer_vecs = all_layer_acts.get(ln, [])
+            for idx, key in enumerate(pooled_keys):
+                if idx < len(layer_vecs):
+                    acts_store[key][ln].append(layer_vecs[idx])
 
     # ── Per-layer metrics ──
     records: List[Dict] = []
@@ -412,52 +467,43 @@ def main() -> None:
     for layer_idx, layer_name in zip(args.layers, layer_names):
         print(f"\nLayer {layer_idx}  ({layer_name})")
 
-        layer_acts: Dict[str, Optional[List[torch.Tensor]]] = {}
-        for key in ANALYSIS_KEYS:
-            store = acts_store.get(key)
-            layer_acts[key] = store.get(layer_name) if store else None
+        layer_acts = {key: acts_store[key].get(layer_name) or None
+                      for key in ANALYSIS_KEYS}
 
         metrics = analyse_layer(layer_acts, k_values)
         if not metrics:
-            print("  [SKIP] No activations available.")
+            print("  [SKIP] No activations.")
             continue
 
         metrics["layer"] = layer_idx
         records.append(metrics)
 
-        # Quick per-layer summary
-        n = metrics.get("n_points", 0)
-        sil_b = metrics.get("silhouette_binary", float("nan"))
-        sil_f = metrics.get("silhouette_fine",   float("nan"))
-        print(f"  N={n}  sil_binary={sil_b:.4f}  sil_fine={sil_f:.4f}")
+        n   = metrics.get("n_points", 0)
+        s_b = metrics.get("silhouette_binary", float("nan"))
+        s_f = metrics.get("silhouette_fine",   float("nan"))
+        print(f"  N={n}  sil_binary={s_b:.4f}  sil_fine={s_f:.4f}")
         for k in k_values:
-            pur_b = metrics.get(f"purity_binary_k{k}",   float("nan"))
-            acc_b = metrics.get(f"accuracy_binary_k{k}", float("nan"))
-            pur_f = metrics.get(f"purity_fine_k{k}",     float("nan"))
-            acc_f = metrics.get(f"accuracy_fine_k{k}",   float("nan"))
-            print(f"    k={k:2d}  pur_b={pur_b:.4f}  acc_b={acc_b:.4f}"
-                  f"  |  pur_f={pur_f:.4f}  acc_f={acc_f:.4f}")
+            pb = metrics.get(f"purity_binary_k{k}", float("nan"))
+            ab = metrics.get(f"accuracy_binary_k{k}", float("nan"))
+            pf = metrics.get(f"purity_fine_k{k}", float("nan"))
+            af = metrics.get(f"accuracy_fine_k{k}", float("nan"))
+            print(f"    k={k:2d}  pur_b={pb:.4f}  acc_b={ab:.4f}"
+                  f"  |  pur_f={pf:.4f}  acc_f={af:.4f}")
 
     if not records:
-        print("\nNo records — nothing to plot or save.")
-        return
+        print("\nNo records to plot or save."); return
 
-    # ── Sort by layer (supports multi-run merging) ──
     records.sort(key=lambda r: r["layer"])
 
-    # ── Summary table ──
     print_table(records, k_values)
 
-    # ── Save CSV ──
     if args.save:
         args.save.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame(records)
-        csv_path = args.save / "knn_locality.csv"
-        df.to_csv(csv_path, index=False)
-        print(f"  CSV saved: {csv_path}")
+        pd.DataFrame(records).to_csv(args.save / "knn_locality.csv", index=False)
+        print(f"  CSV saved: {args.save / 'knn_locality.csv'}")
 
-    # ── Plot ──
-    plot_metrics(records, k_values, save_dir=args.save)
+    plot_aggregate(records, k_values, save_dir=args.save)
+    plot_per_dataset(records, k_values, save_dir=args.save)
 
     print("Done.")
 
